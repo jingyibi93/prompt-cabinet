@@ -1,0 +1,17 @@
+node_modules/
+dist/
+release/
+release-portable/
+
+*.tsbuildinfo
+*.log
+
+prompt-cabinet-home*.png
+
+.DS_Store
+Thumbs.db
+
+*.local
+.env
+.env.*
+
