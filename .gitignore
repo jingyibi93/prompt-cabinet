@@ -2,6 +2,7 @@ node_modules/
 dist/
 release/
 release-portable/
+release-share*/
 
 *.tsbuildinfo
 *.log
@@ -14,4 +15,3 @@ Thumbs.db
 *.local
 .env
 .env.*
-
