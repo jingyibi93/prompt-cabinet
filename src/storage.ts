@@ -18,6 +18,7 @@ declare global {
       loadPrompts: () => Promise<unknown>;
       savePrompts: (prompts: PromptItem[]) => Promise<unknown>;
       getDataPath: () => Promise<string>;
+      onPromptsChanged?: (callback: () => void) => () => void;
     };
     promptCabinetApi?: {
       loadSettings: () => Promise<ApiSettings>;
@@ -32,6 +33,9 @@ declare global {
     promptCabinetWindow?: {
       getAlwaysOnTop: () => Promise<boolean>;
       setAlwaysOnTop: (enabled: boolean) => Promise<boolean>;
+      readClipboardText: () => Promise<string>;
+      openQuickAdd: () => Promise<void>;
+      closeCurrentWindow: () => Promise<void>;
     };
   }
 }
@@ -66,6 +70,7 @@ function normalizePrompt(prompt: PromptItem): PromptItem {
   return {
     ...prompt,
     id: prompt.id || crypto.randomUUID(),
+    status: prompt.status === "inbox" ? "inbox" : "saved",
     title: prompt.title || "Untitled Prompt",
     originalPrompt: prompt.originalPrompt || "",
     refinedPrompt: prompt.refinedPrompt || prompt.originalPrompt || "",

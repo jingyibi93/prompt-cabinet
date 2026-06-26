@@ -1,11 +1,15 @@
-const { app, BrowserWindow, Menu, ipcMain } = require("electron");
+const { app, BrowserWindow, Menu, ipcMain, clipboard, globalShortcut, screen } = require("electron");
 const fs = require("node:fs/promises");
+const fsSync = require("node:fs");
 const path = require("node:path");
 
 const dataFileName = "prompt-cabinet-data.json";
 const settingsFileName = "prompt-cabinet-settings.json";
 const windowSettingsFileName = "prompt-cabinet-window.json";
 const validCategories = ["Design", "Writing", "Research", "Coding", "Image", "Video", "Career", "Product"];
+let mainWindow;
+let quickAddWindow;
+let mainWindowHiddenForQuickAdd = false;
 const analyzeOutputSchema = {
   type: "object",
   additionalProperties: false,
@@ -62,7 +66,7 @@ async function readPromptData() {
   }
 }
 
-async function writePromptData(prompts) {
+async function writePromptData(prompts, sourceWebContentsId) {
   const payload = {
     app: "Prompt Cabinet",
     version: 1,
@@ -71,6 +75,11 @@ async function writePromptData(prompts) {
   };
   await fs.mkdir(app.getPath("userData"), { recursive: true });
   await fs.writeFile(getDataFilePath(), JSON.stringify(payload, null, 2), "utf8");
+  BrowserWindow.getAllWindows().forEach((window) => {
+    if (!window.isDestroyed() && window.webContents.id !== sourceWebContentsId) {
+      window.webContents.send("prompt-cabinet:prompts-changed");
+    }
+  });
   return payload;
 }
 
@@ -299,7 +308,11 @@ async function callLocalCodex(settings, prompt, outputSchema) {
 
   let codex;
   try {
-    codex = new Codex();
+    const codexPathOverride = getPackagedCodexPathOverride();
+    if (app.isPackaged && !codexPathOverride) {
+      throw new Error("Packaged Codex binary was not found in app.asar.unpacked. Rebuild the desktop app.");
+    }
+    codex = new Codex(codexPathOverride ? { codexPathOverride } : {});
   } catch (error) {
     throw new Error(`Could not start Local Codex. ${error instanceof Error ? error.message : "Unknown error"}`);
   }
@@ -312,6 +325,28 @@ async function callLocalCodex(settings, prompt, outputSchema) {
   const result = await thread.run(prompt, { outputSchema });
   const content = extractCodexText(result);
   return parseJsonObject(content);
+}
+
+function getPackagedCodexPathOverride() {
+  if (!app.isPackaged) return "";
+  const targetTriple = process.platform === "win32" && process.arch === "x64"
+    ? "x86_64-pc-windows-msvc"
+    : "";
+  if (!targetTriple) return "";
+
+  const binaryName = process.platform === "win32" ? "codex.exe" : "codex";
+  const candidate = path.join(
+    process.resourcesPath,
+    "app.asar.unpacked",
+    "node_modules",
+    "@openai",
+    "codex-win32-x64",
+    "vendor",
+    targetTriple,
+    "bin",
+    binaryName,
+  );
+  return fsSync.existsSync(candidate) ? candidate : "";
 }
 
 function extractCodexText(result) {
@@ -472,7 +507,7 @@ function countMatches(source, keywords) {
 
 async function createWindow() {
   const windowSettings = await readWindowSettings();
-  const mainWindow = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 1220,
     height: 860,
     x: 80,
@@ -502,13 +537,102 @@ async function createWindow() {
     mainWindow.moveTop();
   });
   mainWindow.loadFile(path.join(__dirname, "..", "dist", "index.html"));
+  mainWindow.on("closed", () => {
+    mainWindow = undefined;
+  });
+}
+
+async function createQuickAddWindow() {
+  if (quickAddWindow && !quickAddWindow.isDestroyed()) {
+    hideMainWindowForQuickAdd();
+    quickAddWindow.restore();
+    applyCapsuleWindowShape(quickAddWindow);
+    positionQuickAddWindow(quickAddWindow);
+    quickAddWindow.show();
+    quickAddWindow.moveTop();
+    quickAddWindow.focus();
+    return;
+  }
+  quickAddWindow = new BrowserWindow({
+    width: 430,
+    height: 58,
+    minWidth: 360,
+    minHeight: 58,
+    resizable: false,
+    frame: false,
+    hasShadow: false,
+    skipTaskbar: true,
+    show: false,
+    title: "Quick Add - Prompt Cabinet",
+    backgroundColor: "#00000000",
+    transparent: true,
+    alwaysOnTop: true,
+    webPreferences: {
+      preload: path.join(__dirname, "preload.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
+  });
+  hideMainWindowForQuickAdd();
+  applyCapsuleWindowShape(quickAddWindow);
+
+  quickAddWindow.once("ready-to-show", () => {
+    applyCapsuleWindowShape(quickAddWindow);
+    positionQuickAddWindow(quickAddWindow);
+    quickAddWindow.show();
+    quickAddWindow.moveTop();
+    quickAddWindow.focus();
+  });
+  quickAddWindow.loadFile(path.join(__dirname, "..", "dist", "index.html"), {
+    query: { quick: "1" },
+  });
+  quickAddWindow.on("closed", () => {
+    quickAddWindow = undefined;
+    restoreMainWindowAfterQuickAdd();
+  });
+}
+
+function positionQuickAddWindow(window) {
+  const cursorPoint = screen.getCursorScreenPoint();
+  const display = screen.getDisplayNearestPoint(cursorPoint);
+  const { x, y, width } = display.workArea;
+  const [windowWidth, windowHeight] = window.getSize();
+  window.setPosition(Math.round(x + (width - windowWidth) / 2), y + 18);
+  window.setSize(windowWidth, windowHeight);
+}
+
+function hideMainWindowForQuickAdd() {
+  if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isVisible()) return;
+  mainWindowHiddenForQuickAdd = true;
+  mainWindow.hide();
+}
+
+function restoreMainWindowAfterQuickAdd() {
+  if (!mainWindowHiddenForQuickAdd || !mainWindow || mainWindow.isDestroyed()) return;
+  mainWindowHiddenForQuickAdd = false;
+  mainWindow.show();
+  mainWindow.moveTop();
+}
+
+function applyCapsuleWindowShape(window) {
+  if (process.platform !== "win32" && process.platform !== "linux") return;
+  const [width, height] = window.getSize();
+  const radius = Math.floor(height / 2);
+  const rects = [];
+  for (let y = 0; y < height; y += 1) {
+    const dy = Math.abs(radius - y - 0.5);
+    const offset = Math.max(0, Math.ceil(radius - Math.sqrt(Math.max(0, radius * radius - dy * dy))));
+    rects.push({ x: offset, y, width: width - offset * 2, height: 1 });
+  }
+  window.setShape(rects);
 }
 
 app.whenReady().then(() => {
   Menu.setApplicationMenu(null);
 
   ipcMain.handle("prompt-cabinet:load-prompts", readPromptData);
-  ipcMain.handle("prompt-cabinet:save-prompts", (_event, prompts) => writePromptData(prompts));
+  ipcMain.handle("prompt-cabinet:save-prompts", (event, prompts) => writePromptData(prompts, event.sender.id));
   ipcMain.handle("prompt-cabinet:get-data-path", () => getDataFilePath());
   ipcMain.handle("prompt-cabinet:load-api-settings", readApiSettings);
   ipcMain.handle("prompt-cabinet:save-api-settings", (_event, settings) => writeApiSettings(settings));
@@ -525,8 +649,17 @@ app.whenReady().then(() => {
     await writeWindowSettings({ alwaysOnTop: nextValue });
     return nextValue;
   });
+  ipcMain.handle("prompt-cabinet:read-clipboard-text", () => clipboard.readText());
+  ipcMain.handle("prompt-cabinet:open-quick-add", () => createQuickAddWindow());
+  ipcMain.handle("prompt-cabinet:close-current-window", (event) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (window) window.close();
+  });
 
   void createWindow();
+  globalShortcut.register("CommandOrControl+Alt+P", () => {
+    void createQuickAddWindow();
+  });
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) void createWindow();
@@ -535,4 +668,8 @@ app.whenReady().then(() => {
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
+});
+
+app.on("will-quit", () => {
+  globalShortcut.unregisterAll();
 });

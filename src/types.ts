@@ -10,6 +10,7 @@ export type PromptCategory =
 
 export type PromptItem = {
   id: string;
+  status?: "inbox" | "saved";
   title: string;
   originalPrompt: string;
   refinedPrompt: string;

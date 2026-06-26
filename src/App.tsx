@@ -15,7 +15,13 @@ type ImportMode = "all" | "category";
 
 const tagTone = ["mint", "peach", "rose", "stone"];
 
+function isQuickAddMode() {
+  return new URLSearchParams(window.location.search).get("quick") === "1";
+}
+
 export default function App() {
+  if (isQuickAddMode()) return <QuickAddApp />;
+
   const [prompts, setPrompts] = useState<PromptItem[]>([]);
   const [storageReady, setStorageReady] = useState(false);
   const [view, setView] = useState<View>("dashboard");
@@ -58,6 +64,20 @@ export default function App() {
   }, [prompts, storageReady]);
 
   useEffect(() => {
+    if (!window.promptCabinetStorage?.onPromptsChanged) return undefined;
+    return window.promptCabinetStorage.onPromptsChanged(() => {
+      void loadPrompts().then((loadedPrompts) => {
+        setPrompts(loadedPrompts);
+        setSelectedId((currentId) =>
+          currentId && loadedPrompts.some((prompt) => prompt.id === currentId)
+            ? currentId
+            : loadedPrompts[0]?.id ?? "",
+        );
+      });
+    });
+  }, []);
+
+  useEffect(() => {
     let isMounted = true;
     void window.promptCabinetWindow?.getAlwaysOnTop().then((enabled) => {
       if (isMounted) setAlwaysOnTop(Boolean(enabled));
@@ -68,17 +88,19 @@ export default function App() {
   }, []);
 
   const selectedPrompt = prompts.find((prompt) => prompt.id === selectedId) ?? prompts[0];
+  const savedPrompts = useMemo(() => prompts.filter((prompt) => prompt.status !== "inbox"), [prompts]);
+  const inboxPrompts = useMemo(() => prompts.filter((prompt) => prompt.status === "inbox"), [prompts]);
   const recentPrompts = useMemo(
     () =>
-      [...prompts]
+      [...savedPrompts]
         .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
         .slice(0, 4),
-    [prompts],
+    [savedPrompts],
   );
 
   const filteredPrompts = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    return prompts.filter((prompt) => {
+    return savedPrompts.filter((prompt) => {
       const matchesCategory = categoryFilter === "All" || prompt.category === categoryFilter;
       const haystack = [
         prompt.title,
@@ -91,18 +113,18 @@ export default function App() {
         .toLowerCase();
       return matchesCategory && (!needle || haystack.includes(needle));
     });
-  }, [categoryFilter, prompts, query]);
-  const categoryPromptCount = prompts.filter((prompt) => prompt.category === dataCategory).length;
+  }, [categoryFilter, savedPrompts, query]);
+  const categoryPromptCount = savedPrompts.filter((prompt) => prompt.category === dataCategory).length;
 
   function addPrompt(prompt: PromptItem) {
-    setPrompts((current) => [prompt, ...current]);
+    setPrompts((current) => [{ ...prompt, status: "saved" }, ...current]);
     setSelectedId(prompt.id);
     setView("detail");
   }
 
   function updatePrompt(updatedPrompt: PromptItem) {
     setPrompts((current) =>
-      current.map((prompt) => (prompt.id === updatedPrompt.id ? updatedPrompt : prompt)),
+      current.map((prompt) => (prompt.id === updatedPrompt.id ? { ...updatedPrompt, status: "saved" } : prompt)),
     );
     setSelectedId(updatedPrompt.id);
     setView("detail");
@@ -117,6 +139,14 @@ export default function App() {
     setView("library");
   }
 
+  function deleteInboxPrompt(id: string) {
+    const prompt = prompts.find((item) => item.id === id);
+    if (!prompt || !window.confirm(`Delete "${prompt.title}" from Inbox?`)) return;
+    const remaining = prompts.filter((item) => item.id !== id);
+    setPrompts(remaining);
+    if (selectedId === id) setSelectedId(remaining[0]?.id ?? "");
+  }
+
   function openDetail(id: string) {
     setSelectedId(id);
     setView("detail");
@@ -125,7 +155,7 @@ export default function App() {
 
   function exportPrompts(mode: "all" | "category") {
     const exportedPrompts =
-      mode === "category" ? prompts.filter((prompt) => prompt.category === dataCategory) : prompts;
+      mode === "category" ? savedPrompts.filter((prompt) => prompt.category === dataCategory) : savedPrompts;
     const payload = {
       app: "Prompt Cabinet",
       version: 1,
@@ -221,6 +251,15 @@ export default function App() {
           </button>
         </nav>
         <div className="data-actions">
+          {window.promptCabinetWindow && (
+            <button
+              className="ghost-button"
+              onClick={() => void window.promptCabinetWindow?.openQuickAdd()}
+              title="Open a small capture window with clipboard text"
+            >
+              Quick Add
+            </button>
+          )}
           {window.promptCabinetWindow && (
             <button
               className={alwaysOnTop ? "ghost-button active" : "ghost-button"}
@@ -332,12 +371,18 @@ export default function App() {
         {view === "dashboard" && (
           <Dashboard
             recentPrompts={recentPrompts}
+            inboxPrompts={inboxPrompts}
             onNew={() => setView("add")}
             onLibrary={(category) => {
               setCategoryFilter(category);
               setView("library");
             }}
             onDetail={openDetail}
+            onEdit={(id) => {
+              setSelectedId(id);
+              setView("edit");
+            }}
+            onDelete={deleteInboxPrompt}
           />
         )}
         {view === "add" && <PromptForm mode="add" onSave={addPrompt} apiSettings={apiSettings} />}
@@ -354,7 +399,7 @@ export default function App() {
               setView("edit");
             }}
             onDelete={deletePrompt}
-            totalPrompts={prompts.length}
+            totalPrompts={savedPrompts.length}
             onNew={() => setView("add")}
           />
         )}
@@ -382,16 +427,102 @@ export default function App() {
   );
 }
 
+function QuickAddApp() {
+  const [rawPrompt, setRawPrompt] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    let isMounted = true;
+    void window.promptCabinetWindow?.readClipboardText().then((text) => {
+      if (isMounted && text?.trim()) setRawPrompt(text);
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const hasPrompt = rawPrompt.trim().length > 0;
+
+  async function pasteFromClipboard() {
+    const text = await window.promptCabinetWindow?.readClipboardText();
+    if (text?.trim()) {
+      setRawPrompt(text);
+    }
+  }
+
+  async function saveQuickPrompt() {
+    if (!hasPrompt) return;
+    setIsSaving(true);
+    const capturedPrompt = rawPrompt.trim();
+    const prompt: PromptItem = {
+      id: crypto.randomUUID(),
+      status: "inbox",
+      title: buildInboxTitle(capturedPrompt),
+      originalPrompt: capturedPrompt,
+      refinedPrompt: capturedPrompt,
+      useCase: "Temporary capture. Review, analyze, and file it later.",
+      inputNeeded: [],
+      expectedOutput: "Saved prompt awaiting organization.",
+      tags: ["Inbox"],
+      platform: "Unsorted",
+      notes: "Quick captured from clipboard.",
+      category: "Product",
+      createdAt: new Date().toISOString(),
+    };
+    const savedPrompts = await loadPrompts();
+    await savePrompts([prompt, ...savedPrompts]);
+    setIsSaving(false);
+  }
+
+  return (
+    <div className="quick-shell">
+      <section className="quick-panel lift-card">
+        <div className="form-actions quick-actions">
+          <button className="pressable" onClick={() => void pasteFromClipboard()}>
+            Paste
+          </button>
+          <button
+            className="pressable"
+            onClick={() => void saveQuickPrompt()}
+            disabled={!hasPrompt || isSaving}
+          >
+            {isSaving ? "Saving..." : "Save"}
+          </button>
+          <button className="pressable" onClick={() => void window.promptCabinetWindow?.closeCurrentWindow()}>
+            Close
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function buildInboxTitle(prompt: string) {
+  const firstLine = prompt
+    .split(/\r?\n/)
+    .find((line) => line.trim())
+    ?.replace(/^[-*\d.\s]+/, "")
+    .trim();
+  if (!firstLine) return "Temporary Prompt";
+  return firstLine.length > 28 ? `${firstLine.slice(0, 28)}...` : firstLine;
+}
+
 function Dashboard({
   recentPrompts,
+  inboxPrompts,
   onNew,
   onLibrary,
   onDetail,
+  onEdit,
+  onDelete,
 }: {
   recentPrompts: PromptItem[];
+  inboxPrompts: PromptItem[];
   onNew: () => void;
   onLibrary: (category: PromptCategory) => void;
   onDetail: (id: string) => void;
+  onEdit: (id: string) => void;
+  onDelete: (id: string) => void;
 }) {
   return (
     <>
@@ -405,6 +536,36 @@ function Dashboard({
           New Prompt
         </button>
       </section>
+
+      {inboxPrompts.length > 0 && (
+        <section className="section-band inbox-band">
+          <div className="section-heading">
+            <div>
+              <h2>Inbox</h2>
+              <span>Review later, then file into a category</span>
+            </div>
+            <span>{inboxPrompts.length} waiting</span>
+          </div>
+          <div className="inbox-list lift-card">
+            {inboxPrompts.slice(0, 6).map((prompt) => (
+              <article className="inbox-item" key={prompt.id}>
+                <button onClick={() => onDetail(prompt.id)}>
+                  <strong>{prompt.title}</strong>
+                  <span>{prompt.originalPrompt}</span>
+                </button>
+                <div>
+                  <button className="ghost-button" onClick={() => onEdit(prompt.id)}>
+                    Organize
+                  </button>
+                  <button className="ghost-button danger-button" onClick={() => onDelete(prompt.id)}>
+                    Delete
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
 
       <section className="section-band">
         <div className="section-heading">
@@ -455,6 +616,7 @@ function PromptForm({
   const [draft, setDraft] = useState<PromptItem>(
     initialPrompt ?? {
       id: "",
+      status: "saved",
       title: "",
       originalPrompt: "",
       refinedPrompt: "",
@@ -524,6 +686,7 @@ function PromptForm({
     onSave({
       ...analyzedFallback,
       id: draft.id || crypto.randomUUID(),
+      status: "saved",
       title: draft.title.trim() || analyzedFallback.title || "Untitled Prompt",
       originalPrompt: draft.originalPrompt.trim(),
       refinedPrompt: (draft.refinedPrompt || analyzedFallback.refinedPrompt).trim(),
@@ -895,6 +1058,7 @@ function autoClassifyImportedPrompt(prompt: PromptItem, forcedCategory?: PromptC
 
   return {
     ...prompt,
+    status: "saved",
     title: genericTitle ? analyzed.title : importedTitle,
     category,
     tags: mergeUnique(analyzed.tags, prompt.tags),
