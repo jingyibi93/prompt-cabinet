@@ -21,7 +21,32 @@ contextBridge.exposeInMainWorld("promptCabinetApi", {
 contextBridge.exposeInMainWorld("promptCabinetWindow", {
   getAlwaysOnTop: () => ipcRenderer.invoke("prompt-cabinet:get-always-on-top"),
   setAlwaysOnTop: (enabled) => ipcRenderer.invoke("prompt-cabinet:set-always-on-top", enabled),
+  loadShortcuts: () => ipcRenderer.invoke("prompt-cabinet:load-shortcuts"),
+  saveShortcuts: (shortcuts) => ipcRenderer.invoke("prompt-cabinet:save-shortcuts", shortcuts),
+  setQuickAddMode: (mode) => ipcRenderer.invoke("prompt-cabinet:set-quick-add-mode", mode),
   readClipboardText: () => ipcRenderer.invoke("prompt-cabinet:read-clipboard-text"),
+  readClipboardImage: () => ipcRenderer.invoke("prompt-cabinet:read-clipboard-image"),
+  insertText: (text, language) => ipcRenderer.invoke("prompt-cabinet:insert-text", text, language),
   openQuickAdd: () => ipcRenderer.invoke("prompt-cabinet:open-quick-add"),
   closeCurrentWindow: () => ipcRenderer.invoke("prompt-cabinet:close-current-window"),
+  onQuickAddSaveShortcut: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on("prompt-cabinet:quick-add-save-shortcut", listener);
+    return () => ipcRenderer.removeListener("prompt-cabinet:quick-add-save-shortcut", listener);
+  },
+  onQuickAddModeShortcut: (callback) => {
+    const listener = (_event, mode) => callback(mode);
+    ipcRenderer.on("prompt-cabinet:quick-add-mode-shortcut", listener);
+    return () => ipcRenderer.removeListener("prompt-cabinet:quick-add-mode-shortcut", listener);
+  },
+  onQuickAddCommandShortcut: (callback) => {
+    const listener = (_event, command) => callback(command);
+    ipcRenderer.on("prompt-cabinet:quick-add-command-shortcut", listener);
+    return () => ipcRenderer.removeListener("prompt-cabinet:quick-add-command-shortcut", listener);
+  },
+  onQuickAddShortcutsChanged: (callback) => {
+    const listener = (_event, shortcuts) => callback(shortcuts);
+    ipcRenderer.on("prompt-cabinet:quick-add-shortcuts-changed", listener);
+    return () => ipcRenderer.removeListener("prompt-cabinet:quick-add-shortcuts-changed", listener);
+  },
 });

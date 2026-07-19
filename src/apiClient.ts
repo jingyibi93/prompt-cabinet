@@ -1,3 +1,4 @@
+import type { AnalysisLanguageSetting } from "./i18n";
 import type { AnalyzeResult, ApiSettings } from "./types";
 
 const SETTINGS_KEY = "prompt-cabinet-api-settings";
@@ -44,6 +45,7 @@ export async function analyzePromptWithApi(
   rawPrompt: string,
   notes: string,
   settings: ApiSettings,
+  outputLanguage: AnalysisLanguageSetting = "auto",
 ): Promise<AnalyzeResult> {
   if (!window.promptCabinetApi) {
     throw new Error("Enhanced Analyze is available in the desktop app only.");
@@ -52,6 +54,7 @@ export async function analyzePromptWithApi(
     rawPrompt,
     notes,
     settings: normalizeSettings(settings),
+    outputLanguage,
   });
 }
 

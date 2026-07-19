@@ -1,12 +1,4 @@
-export type PromptCategory =
-  | "Design"
-  | "Writing"
-  | "Research"
-  | "Coding"
-  | "Image"
-  | "Video"
-  | "Career"
-  | "Product";
+export type PromptCategory = string;
 
 export type PromptItem = {
   id: string;
@@ -22,6 +14,8 @@ export type PromptItem = {
   notes: string;
   category: PromptCategory;
   createdAt: string;
+  updatedAt?: string;
+  previewImage?: string;
 };
 
 export type ApiSettings = {
@@ -30,6 +24,19 @@ export type ApiSettings = {
   baseUrl: string;
   apiKey: string;
   model: string;
+};
+
+export type QuickShortcutSettings = {
+  openQuickAdd: string;
+  runAction: string;
+  captureMode: string;
+  insertMode: string;
+  previousCategory: string;
+  nextCategory: string;
+  previousPrompt: string;
+  nextPrompt: string;
+  insertSelected: string;
+  closeQuickAdd: string;
 };
 
 export type AnalyzeResult = {
