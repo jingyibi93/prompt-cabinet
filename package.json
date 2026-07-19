@@ -1,6 +1,8 @@
 {
   "name": "prompt-cabinet",
-  "version": "0.1.0",
+  "version": "0.1.0-beta.1",
+  "description": "A local-first desktop library for collecting, organizing, and reusing prompts.",
+  "author": "Jingyi Bi",
   "private": true,
   "type": "module",
   "main": "electron/main.cjs",
@@ -10,6 +12,7 @@
     "preview": "vite preview --host 127.0.0.1",
     "desktop:dev": "npm run build && electron .",
     "desktop:package": "npm run build && electron-builder --config.electronDist=node_modules/electron/dist",
+    "desktop:package:mac": "pnpm run build && electron-builder --mac dmg --arm64 --publish never --config.electronDist=node_modules/electron/dist",
     "desktop:unpacked": "npm run build && electron-builder --dir --config.electronDist=node_modules/electron/dist --config.directories.output=release-share",
     "desktop:portable": "npm run build && electron-builder --win portable --config.electronDist=node_modules/electron/dist --config.directories.output=release-share"
   },
@@ -36,7 +39,31 @@
       "package.json"
     ],
     "directories": {
+      "buildResources": "build",
       "output": "release"
+    },
+    "asarUnpack": [
+      "node_modules/@openai/codex*/**/*"
+    ],
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.productivity",
+      "icon": "build/icon.icns",
+      "identity": "-",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "artifactName": "Prompt-Cabinet-${version}-mac-${arch}.${ext}"
+    },
+    "dmg": {
+      "sign": false,
+      "title": "Prompt Cabinet ${version}"
     },
     "win": {
       "target": [

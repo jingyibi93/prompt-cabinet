@@ -477,24 +477,48 @@ async function callLocalCodex(settings, prompt, outputSchema) {
 
 function getPackagedCodexPathOverride() {
   if (!app.isPackaged) return "";
-  const targetTriple = process.platform === "win32" && process.arch === "x64"
-    ? "x86_64-pc-windows-msvc"
-    : "";
-  if (!targetTriple) return "";
+  const target = process.platform === "darwin" && process.arch === "arm64"
+    ? { packageName: "codex-darwin-arm64", triple: "aarch64-apple-darwin", binaryName: "codex" }
+    : process.platform === "darwin" && process.arch === "x64"
+      ? { packageName: "codex-darwin-x64", triple: "x86_64-apple-darwin", binaryName: "codex" }
+      : process.platform === "win32" && process.arch === "x64"
+        ? { packageName: "codex-win32-x64", triple: "x86_64-pc-windows-msvc", binaryName: "codex.exe" }
+        : undefined;
+  if (!target) return "";
 
-  const binaryName = process.platform === "win32" ? "codex.exe" : "codex";
-  const candidate = path.join(
-    process.resourcesPath,
-    "app.asar.unpacked",
-    "node_modules",
+  const unpackedNodeModules = path.join(process.resourcesPath, "app.asar.unpacked", "node_modules");
+  const directCandidate = path.join(
+    unpackedNodeModules,
     "@openai",
-    "codex-win32-x64",
+    target.packageName,
     "vendor",
-    targetTriple,
+    target.triple,
     "bin",
-    binaryName,
+    target.binaryName,
   );
-  return fsSync.existsSync(candidate) ? candidate : "";
+  if (fsSync.existsSync(directCandidate)) return directCandidate;
+
+  const pnpmDirectory = path.join(unpackedNodeModules, ".pnpm");
+  try {
+    const packageDirectory = fsSync.readdirSync(pnpmDirectory).find((name) =>
+      name.startsWith("@openai+codex@") && name.endsWith(`-${process.platform}-${process.arch}`),
+    );
+    if (!packageDirectory) return "";
+    const pnpmCandidate = path.join(
+      pnpmDirectory,
+      packageDirectory,
+      "node_modules",
+      "@openai",
+      "codex",
+      "vendor",
+      target.triple,
+      "bin",
+      target.binaryName,
+    );
+    return fsSync.existsSync(pnpmCandidate) ? pnpmCandidate : "";
+  } catch {
+    return "";
+  }
 }
 
 function extractCodexText(result) {
