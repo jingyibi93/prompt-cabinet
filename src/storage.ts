@@ -1,4 +1,4 @@
-import type { AnalyzeResult, ApiSettings, PromptCategory, PromptItem, QuickShortcutSettings } from "./types";
+import type { AnalyzeResult, ApiSettings, PromptCategory, PromptItem, QuickShortcutSettings, RewriteSegment } from "./types";
 import { analyzePrompt, isChinesePrompt } from "./promptEngine";
 
 const STORAGE_KEY = "prompt-cabinet-items";
@@ -86,12 +86,38 @@ function normalizePrompt(prompt: PromptItem): PromptItem {
       typeof prompt.previewImage === "string" && prompt.previewImage.startsWith("data:image/")
         ? prompt.previewImage
         : undefined,
+    rewriteHistory: normalizeRewriteHistory(prompt.rewriteHistory, prompt.originalPrompt || "", prompt.refinedPrompt || prompt.originalPrompt || ""),
     category: normalizeCategory(prompt.category),
     tags: Array.isArray(prompt.tags)
       ? normalizeTags(prompt.tags.map((tag) => (tag === "Portfolio" ? "Design" : tag === "Codex" ? "Coding" : tag)))
       : [],
   };
   return localizeLegacyMockAnalysis(normalized);
+}
+
+function normalizeRewriteHistory(value: unknown, originalPrompt: string, refinedPrompt: string): RewriteSegment[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const segments = value
+    .filter(isRecord)
+    .map((segment) => ({
+      value: typeof segment.value === "string" ? segment.value : "",
+      status: segment.status,
+    }))
+    .filter(
+      (segment): segment is RewriteSegment =>
+        Boolean(segment.value) && ["same", "added", "removed"].includes(String(segment.status)),
+    );
+  if (!segments.length) return undefined;
+
+  const originalProjection = segments
+    .filter((segment) => segment.status !== "added")
+    .map((segment) => segment.value)
+    .join("");
+  const refinedProjection = segments
+    .filter((segment) => segment.status !== "removed")
+    .map((segment) => segment.value)
+    .join("");
+  return originalProjection === originalPrompt && refinedProjection === refinedPrompt ? segments : undefined;
 }
 
 function localizeLegacyMockAnalysis(prompt: PromptItem) {

@@ -4,7 +4,7 @@
 
 ## 安装
 
-1. 在 GitHub Releases 下载 `Prompt-Cabinet-0.1.0-beta.1-mac-arm64.dmg`。
+1. 在 GitHub Releases 下载 `Prompt-Cabinet-0.1.0-beta.2-mac-arm64.dmg`。
 2. 双击打开 DMG。
 3. 将 Prompt Cabinet 拖入“应用程序”文件夹。
 4. 打开“应用程序”，右键点击 Prompt Cabinet，选择“打开”。

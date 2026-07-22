@@ -1180,6 +1180,7 @@ select {
 }
 
 .diff-token {
+  display: inline;
   border-radius: 6px;
   padding: 1px 3px;
 }
@@ -1199,6 +1200,28 @@ select {
 .custom-prompt-section {
   display: flex;
   flex-direction: column;
+}
+
+.custom-prompt-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.custom-prompt-heading h2 {
+  margin: 0;
+}
+
+.custom-prompt-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.custom-prompt-actions .ghost-button {
+  min-width: 72px;
 }
 
 .custom-prompt-editor {

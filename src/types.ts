@@ -1,5 +1,10 @@
 export type PromptCategory = string;
 
+export type RewriteSegment = {
+  value: string;
+  status: "same" | "added" | "removed";
+};
+
 export type PromptItem = {
   id: string;
   status?: "inbox" | "saved";
@@ -16,6 +21,7 @@ export type PromptItem = {
   createdAt: string;
   updatedAt?: string;
   previewImage?: string;
+  rewriteHistory?: RewriteSegment[];
 };
 
 export type ApiSettings = {

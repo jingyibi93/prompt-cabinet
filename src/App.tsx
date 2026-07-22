@@ -14,7 +14,7 @@ import {
   type AnalysisLanguageSetting,
   type UiLanguageSetting,
 } from "./i18n";
-import type { ApiSettings, PromptCategory, PromptItem, QuickShortcutSettings } from "./types";
+import type { ApiSettings, PromptCategory, PromptItem, QuickShortcutSettings, RewriteSegment } from "./types";
 
 type View = "dashboard" | "add" | "library" | "detail" | "edit" | "settings";
 type ImportMode = "all" | "category";
@@ -634,6 +634,7 @@ function AppContent() {
         {view === "detail" && selectedPrompt && (
           <PromptDetail
             prompt={selectedPrompt}
+            onSave={updatePrompt}
             onEdit={() => setView("edit")}
             onDelete={() => deletePrompt(selectedPrompt.id)}
           />
@@ -1504,6 +1505,7 @@ function PromptForm({
       notes: draft.notes.trim() || t("No source note added yet.", "暂无来源备注。"),
       category: draft.category,
       createdAt: draft.createdAt || new Date().toISOString(),
+      rewriteHistory: undefined,
     });
   }
 
@@ -2239,24 +2241,55 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function PromptDetail({
   prompt,
+  onSave,
   onEdit,
   onDelete,
 }: {
   prompt: PromptItem;
+  onSave: (prompt: PromptItem) => void;
   onEdit: () => void;
   onDelete: () => void;
 }) {
   const { t } = useLanguage();
   const [customPrompt, setCustomPrompt] = useState(prompt.refinedPrompt || prompt.originalPrompt);
+  const [rewriteSegments, setRewriteSegments] = useState<RewriteSegment[]>(() => getPromptRewriteSegments(prompt));
+  const [saved, setSaved] = useState(false);
+  const savedCustomPrompt = prompt.refinedPrompt || prompt.originalPrompt;
+  const savedRewriteSegments = getPromptRewriteSegments(prompt);
+  const hasUnsavedChanges =
+    customPrompt !== savedCustomPrompt || !areRewriteSegmentsEqual(rewriteSegments, savedRewriteSegments);
 
   useEffect(() => {
     setCustomPrompt(prompt.refinedPrompt || prompt.originalPrompt);
-  }, [prompt.id, prompt.originalPrompt, prompt.refinedPrompt]);
+    setRewriteSegments(getPromptRewriteSegments(prompt));
+  }, [prompt.id, prompt.originalPrompt, prompt.refinedPrompt, prompt.rewriteHistory]);
 
-  const rewriteDiff = useMemo(
-    () => buildRewriteDiff(prompt.originalPrompt, customPrompt),
-    [prompt.originalPrompt, customPrompt],
-  );
+  useEffect(() => {
+    setSaved(false);
+  }, [prompt.id]);
+
+  function saveCustomPrompt() {
+    if (!hasUnsavedChanges) return;
+    onSave({
+      ...prompt,
+      refinedPrompt: customPrompt,
+      rewriteHistory: rewriteSegments.some((segment) => segment.status !== "same") ? rewriteSegments : undefined,
+    });
+    setSaved(true);
+    window.setTimeout(() => setSaved(false), 1300);
+  }
+
+  function restoreOriginalPrompt() {
+    setCustomPrompt(prompt.originalPrompt);
+    setRewriteSegments(prompt.originalPrompt ? [{ value: prompt.originalPrompt, status: "same" }] : []);
+    setSaved(false);
+  }
+
+  function updateCustomPrompt(nextPrompt: string) {
+    setRewriteSegments((current) => applyTrackedRewrite(current, customPrompt, nextPrompt, prompt.originalPrompt));
+    setCustomPrompt(nextPrompt);
+    setSaved(false);
+  }
 
   return (
     <article className="detail-panel">
@@ -2285,13 +2318,27 @@ function PromptDetail({
       </section>
 
       <div className="detail-grid">
-        <LiveRewritePreview diff={rewriteDiff} />
+        <LiveRewritePreview segments={rewriteSegments} />
         <section className="detail-section lift-card featured custom-prompt-section">
-          <h2>{t("Custom Prompt", "自定义 Prompt")}</h2>
+          <div className="custom-prompt-heading">
+            <h2>{t("Custom Prompt", "自定义 Prompt")}</h2>
+            <div className="custom-prompt-actions">
+              <button className="ghost-button" disabled={!hasUnsavedChanges} onClick={saveCustomPrompt}>
+                {saved ? t("Saved", "已保存") : t("Save", "保存")}
+              </button>
+              <button
+                className="ghost-button"
+                disabled={customPrompt === prompt.originalPrompt}
+                onClick={restoreOriginalPrompt}
+              >
+                {t("Restore", "复原")}
+              </button>
+            </div>
+          </div>
           <textarea
             className="custom-prompt-editor"
             value={customPrompt}
-            onChange={(event) => setCustomPrompt(event.target.value)}
+            onChange={(event) => updateCustomPrompt(event.target.value)}
             aria-label="Custom prompt to copy"
           />
         </section>
@@ -2406,15 +2453,15 @@ function getAnalyzeModeLabel(settings: ApiSettings, t: (english: string, chinese
   return t("Mock Analyze", "本地规则分析");
 }
 
-function buildRewriteDiff(original: string, refined: string): RewriteDiff {
-  const originalTokens = tokenizePrompt(original);
-  const refinedTokens = tokenizePrompt(refined || original);
-  const originalWords = originalTokens.map(normalizeDiffToken);
-  const refinedWords = refinedTokens.map(normalizeDiffToken);
-  const table = Array.from({ length: originalTokens.length + 1 }, () => Array(refinedTokens.length + 1).fill(0));
+function buildSnapshotRewriteSegments(original: string, refined: string): RewriteSegment[] {
+  const originalBlocks = splitPromptBlocks(original);
+  const refinedBlocks = splitPromptBlocks(refined);
+  const originalWords = originalBlocks.map(normalizeDiffToken);
+  const refinedWords = refinedBlocks.map(normalizeDiffToken);
+  const table = Array.from({ length: originalBlocks.length + 1 }, () => Array(refinedBlocks.length + 1).fill(0));
 
-  for (let originalIndex = originalTokens.length - 1; originalIndex >= 0; originalIndex -= 1) {
-    for (let refinedIndex = refinedTokens.length - 1; refinedIndex >= 0; refinedIndex -= 1) {
+  for (let originalIndex = originalBlocks.length - 1; originalIndex >= 0; originalIndex -= 1) {
+    for (let refinedIndex = refinedBlocks.length - 1; refinedIndex >= 0; refinedIndex -= 1) {
       table[originalIndex][refinedIndex] =
         originalWords[originalIndex] === refinedWords[refinedIndex]
           ? table[originalIndex + 1][refinedIndex + 1] + 1
@@ -2422,72 +2469,171 @@ function buildRewriteDiff(original: string, refined: string): RewriteDiff {
     }
   }
 
-  const originalDiff: DiffToken[] = [];
-  const refinedDiff: DiffToken[] = [];
-  const pendingAdded: DiffToken[] = [];
-  const pendingRemoved: DiffToken[] = [];
-  let added = 0;
-  let removed = 0;
+  const segments: RewriteSegment[] = [];
+  const pendingAdded: string[] = [];
+  const pendingRemoved: string[] = [];
   let originalIndex = 0;
   let refinedIndex = 0;
 
-  function flushChangeTokens() {
+  function flushChanges() {
     if (!pendingAdded.length && !pendingRemoved.length) return;
-    refinedDiff.push(...pendingRemoved, ...pendingAdded);
+    if (pendingRemoved.length) {
+      segments.push({ value: pendingRemoved.join(""), status: "removed" });
+    }
+    if (pendingAdded.length) {
+      segments.push({ value: pendingAdded.join(""), status: "added" });
+    }
     pendingAdded.length = 0;
     pendingRemoved.length = 0;
   }
 
-  while (originalIndex < originalTokens.length || refinedIndex < refinedTokens.length) {
+  while (originalIndex < originalBlocks.length || refinedIndex < refinedBlocks.length) {
     if (
-      originalIndex < originalTokens.length &&
-      refinedIndex < refinedTokens.length &&
+      originalIndex < originalBlocks.length &&
+      refinedIndex < refinedBlocks.length &&
       originalWords[originalIndex] === refinedWords[refinedIndex]
     ) {
-      flushChangeTokens();
-      originalDiff.push({ value: originalTokens[originalIndex], status: "same" });
-      refinedDiff.push({ value: refinedTokens[refinedIndex], status: "same" });
+      flushChanges();
+      segments.push({ value: refinedBlocks[refinedIndex], status: "same" });
       originalIndex += 1;
       refinedIndex += 1;
       continue;
     }
 
     if (
-      refinedIndex < refinedTokens.length &&
-      (originalIndex >= originalTokens.length ||
+      refinedIndex < refinedBlocks.length &&
+      (originalIndex >= originalBlocks.length ||
         table[originalIndex][refinedIndex + 1] >= table[originalIndex + 1][refinedIndex])
     ) {
-      pendingAdded.push({ value: refinedTokens[refinedIndex], status: "added" });
-      added += isWhitespaceToken(refinedTokens[refinedIndex]) ? 0 : 1;
+      pendingAdded.push(refinedBlocks[refinedIndex]);
       refinedIndex += 1;
       continue;
     }
 
-    if (originalIndex < originalTokens.length) {
-      originalDiff.push({ value: originalTokens[originalIndex], status: "same" });
-      pendingRemoved.push({ value: originalTokens[originalIndex], status: "removed" });
-      removed += isWhitespaceToken(originalTokens[originalIndex]) ? 0 : 1;
+    if (originalIndex < originalBlocks.length) {
+      pendingRemoved.push(originalBlocks[originalIndex]);
       originalIndex += 1;
     }
   }
 
-  flushChangeTokens();
+  flushChanges();
 
-  return { original: originalDiff, refined: refinedDiff, added, removed };
+  return mergeRewriteSegments(segments);
 }
 
-function tokenizePrompt(value: string) {
-  // Keep whitespace intact while giving CJK text enough granularity for
-  // unchanged text after an edit to remain anchored in its original place.
-  return value.match(/\s+|[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]|[\p{L}\p{N}_]+|[^\s]/gu) ?? [];
+function splitPromptBlocks(value: string) {
+  return value.match(/[^\n]*(?:\n|$)/g)?.filter(Boolean) ?? [];
 }
 
 function normalizeDiffToken(value: string) {
-  return value.trim().toLowerCase();
+  return value;
 }
 
-function isWhitespaceToken(value: string) {
-  return value.trim().length === 0;
+function getPromptRewriteSegments(prompt: PromptItem) {
+  const refinedPrompt = prompt.refinedPrompt || prompt.originalPrompt;
+  if (isValidRewriteHistory(prompt.rewriteHistory, prompt.originalPrompt, refinedPrompt)) {
+    return prompt.rewriteHistory;
+  }
+  return buildSnapshotRewriteSegments(prompt.originalPrompt, refinedPrompt);
+}
+
+function isValidRewriteHistory(
+  history: RewriteSegment[] | undefined,
+  originalPrompt: string,
+  refinedPrompt: string,
+): history is RewriteSegment[] {
+  if (!history?.length) return false;
+  const originalProjection = history
+    .filter((segment) => segment.status !== "added")
+    .map((segment) => segment.value)
+    .join("");
+  const refinedProjection = history
+    .filter((segment) => segment.status !== "removed")
+    .map((segment) => segment.value)
+    .join("");
+  return originalProjection === originalPrompt && refinedProjection === refinedPrompt;
+}
+
+function applyTrackedRewrite(
+  history: RewriteSegment[],
+  previousPrompt: string,
+  nextPrompt: string,
+  originalPrompt: string,
+) {
+  const validHistory = isValidRewriteHistory(history, originalPrompt, previousPrompt)
+    ? history
+    : buildSnapshotRewriteSegments(originalPrompt, previousPrompt);
+  const previousCharacters = Array.from(previousPrompt);
+  const nextCharacters = Array.from(nextPrompt);
+  let prefixLength = 0;
+  while (
+    prefixLength < previousCharacters.length &&
+    prefixLength < nextCharacters.length &&
+    previousCharacters[prefixLength] === nextCharacters[prefixLength]
+  ) {
+    prefixLength += 1;
+  }
+
+  let suffixLength = 0;
+  while (
+    suffixLength < previousCharacters.length - prefixLength &&
+    suffixLength < nextCharacters.length - prefixLength &&
+    previousCharacters[previousCharacters.length - 1 - suffixLength] ===
+      nextCharacters[nextCharacters.length - 1 - suffixLength]
+  ) {
+    suffixLength += 1;
+  }
+
+  const deletedCharacterCount = previousCharacters.length - prefixLength - suffixLength;
+  const insertedValue = nextCharacters.slice(prefixLength, nextCharacters.length - suffixLength).join("");
+  const atoms = validHistory.flatMap((segment) =>
+    Array.from(segment.value, (value) => ({ value, status: segment.status } satisfies RewriteSegment)),
+  );
+  const visibleAtomIndexes: number[] = [];
+  atoms.forEach((atom, index) => {
+    if (atom.status !== "removed") visibleAtomIndexes.push(index);
+  });
+  const deletedIndexes = new Set(visibleAtomIndexes.slice(prefixLength, prefixLength + deletedCharacterCount));
+  const nextVisibleAtomIndex = visibleAtomIndexes[prefixLength + deletedCharacterCount] ?? atoms.length;
+  const updatedAtoms: RewriteSegment[] = [];
+
+  atoms.forEach((atom, index) => {
+    if (index === nextVisibleAtomIndex && insertedValue) {
+      updatedAtoms.push({ value: insertedValue, status: "added" });
+    }
+    if (!deletedIndexes.has(index)) {
+      updatedAtoms.push(atom);
+    } else if (atom.status === "same") {
+      updatedAtoms.push({ ...atom, status: "removed" });
+    }
+  });
+  if (nextVisibleAtomIndex === atoms.length && insertedValue) {
+    updatedAtoms.push({ value: insertedValue, status: "added" });
+  }
+
+  return mergeRewriteSegments(updatedAtoms);
+}
+
+function mergeRewriteSegments(segments: RewriteSegment[]) {
+  return segments.reduce<RewriteSegment[]>((merged, segment) => {
+    if (!segment.value) return merged;
+    const previous = merged[merged.length - 1];
+    if (previous?.status === segment.status) {
+      previous.value += segment.value;
+    } else {
+      merged.push({ ...segment });
+    }
+    return merged;
+  }, []);
+}
+
+function areRewriteSegmentsEqual(first: RewriteSegment[], second: RewriteSegment[]) {
+  return (
+    first.length === second.length &&
+    first.every(
+      (segment, index) => segment.status === second[index].status && segment.value === second[index].value,
+    )
+  );
 }
 
 function DetailSection({ title, body, featured = false }: { title: string; body: string; featured?: boolean }) {
@@ -2499,19 +2645,7 @@ function DetailSection({ title, body, featured = false }: { title: string; body:
   );
 }
 
-type DiffToken = {
-  value: string;
-  status: "same" | "added" | "removed";
-};
-
-type RewriteDiff = {
-  original: DiffToken[];
-  refined: DiffToken[];
-  added: number;
-  removed: number;
-};
-
-function LiveRewritePreview({ diff }: { diff: RewriteDiff }) {
+function LiveRewritePreview({ segments }: { segments: RewriteSegment[] }) {
   const { t } = useLanguage();
   return (
     <section className="detail-section lift-card live-rewrite-section">
@@ -2522,20 +2656,20 @@ function LiveRewritePreview({ diff }: { diff: RewriteDiff }) {
           <span><i className="legend-dot removed" />{t("Removed", "删除")}</span>
         </div>
       </div>
-      <DiffText tokens={diff.refined} label="Original prompt with live custom changes" />
+      <DiffText segments={segments} label="Original prompt with live custom changes" />
     </section>
   );
 }
 
-function DiffText({ tokens, label }: { tokens: DiffToken[]; label: string }) {
+function DiffText({ segments, label }: { segments: RewriteSegment[]; label: string }) {
   return (
-    <p className="diff-text live-rewrite-text" aria-label={label}>
-      {tokens.map((token, index) => (
-        <span className={token.status === "same" ? undefined : `diff-token ${token.status}`} key={`${label}-${index}`}>
-          {token.value}
+    <div className="diff-text live-rewrite-text" aria-label={label}>
+      {segments.map((segment, index) => (
+        <span className={segment.status === "same" ? undefined : `diff-token ${segment.status}`} key={`${label}-${index}`}>
+          {segment.value}
         </span>
       ))}
-    </p>
+    </div>
   );
 }
 
