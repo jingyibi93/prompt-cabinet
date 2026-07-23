@@ -7,6 +7,7 @@ const { execFile } = require("node:child_process");
 const dataFileName = "prompt-cabinet-data.json";
 const settingsFileName = "prompt-cabinet-settings.json";
 const windowSettingsFileName = "prompt-cabinet-window.json";
+const appBundleId = "com.promptcabinet.app";
 const validCategories = ["Design", "Writing", "Research", "Coding", "Image", "Video", "Career", "Product"];
 const defaultQuickShortcutSettings = Object.freeze({
   openQuickAdd: "CommandOrControl+Alt+P",
@@ -28,7 +29,6 @@ let mainWindowPinEnabled = false;
 let quickAddWindow;
 let mainWindowHiddenForQuickAdd = false;
 let quickAddFloatInterval;
-let quickInsertTargetBundleId = "";
 let quickShortcutSettings = { ...defaultQuickShortcutSettings };
 let registeredOpenQuickAddShortcut = "";
 let quickAddMode = "capture";
@@ -749,7 +749,6 @@ async function createWindow() {
 }
 
 async function createQuickAddWindow() {
-  await rememberQuickInsertTarget();
   if (quickAddWindow && !quickAddWindow.isDestroyed()) {
     hideMainWindowForQuickAdd();
     quickAddWindow.restore();
@@ -803,7 +802,6 @@ async function createQuickAddWindow() {
   quickAddWindow.on("blur", () => {
     keepQuickAddFloating(quickAddWindow);
     quickAddWindow.moveTop();
-    setTimeout(() => void rememberQuickInsertTarget(), 120);
   });
   quickAddWindow.on("show", () => {
     keepQuickAddFloating(quickAddWindow);
@@ -899,7 +897,6 @@ function startQuickAddFloatGuard(window) {
       return;
     }
     keepQuickAddFloating(window);
-    if (window.isVisible() && !window.isFocused()) void rememberQuickInsertTarget();
     if (window.isVisible()) window.moveTop();
   }, 500);
 }
@@ -968,59 +965,6 @@ function wait(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-async function getFrontmostApplication() {
-  if (process.platform !== "darwin") return undefined;
-  const output = await runSystemCommand("/usr/bin/osascript", [
-    "-e",
-    'tell application "System Events"',
-    "-e",
-    "set activeProcess to first application process whose frontmost is true",
-    "-e",
-    'return (unix id of activeProcess as text) & "|" & (bundle identifier of activeProcess as text)',
-    "-e",
-    "end tell",
-  ]);
-  const separatorIndex = output.indexOf("|");
-  if (separatorIndex < 1) return undefined;
-  return {
-    pid: Number(output.slice(0, separatorIndex)),
-    bundleId: output.slice(separatorIndex + 1).trim(),
-  };
-}
-
-async function rememberQuickInsertTarget() {
-  if (process.platform !== "darwin") return;
-  try {
-    const frontmostApp = await getFrontmostApplication();
-    if (!frontmostApp?.bundleId || frontmostApp.pid === process.pid) return;
-    quickInsertTargetBundleId = frontmostApp.bundleId;
-  } catch (error) {
-    console.warn("Unable to remember the active app for Quick Insert:", error?.message ?? error);
-  }
-}
-
-async function activateQuickInsertTarget() {
-  if (process.platform !== "darwin" || !quickInsertTargetBundleId) return;
-  const targetBundleId = quickInsertTargetBundleId;
-  await runSystemCommand("/usr/bin/osascript", [
-    "-e",
-    "on run argv",
-    "-e",
-    "set targetBundleId to item 1 of argv",
-    "-e",
-    'tell application "System Events" to set frontmost of first application process whose bundle identifier is targetBundleId to true',
-    "-e",
-    "end run",
-    targetBundleId,
-  ]);
-
-  for (let attempt = 0; attempt < 6; attempt += 1) {
-    const frontmostApp = await getFrontmostApplication();
-    if (frontmostApp?.bundleId === targetBundleId) return;
-    await wait(80);
-  }
-}
-
 async function showAccessibilityGuide(sourceWindow, language = "en") {
   const useChinese = language === "zh";
   const permissionName = app.isPackaged ? "Prompt Cabinet" : "Electron (Prompt Cabinet Dev)";
@@ -1034,7 +978,10 @@ async function showAccessibilityGuide(sourceWindow, language = "en") {
           "",
           `1. 在辅助功能列表中找到“${permissionName}”。`,
           "2. 打开它旁边的开关。",
-          "3. 返回输入框并再次点击插入。",
+          "3. 完全退出并重新打开 Prompt Cabinet。",
+          "4. 返回输入框并再次点击插入。",
+          "",
+          "如果开关已经打开但仍无法插入，请点击“刷新授权”，再重新开启开关。",
           "",
           "Prompt 也已复制到剪贴板，仍可手动粘贴。",
         ].join("\n")
@@ -1043,24 +990,46 @@ async function showAccessibilityGuide(sourceWindow, language = "en") {
           "",
           `1. In Accessibility, find “${permissionName}”.`,
           "2. Turn on the switch beside it.",
-          "3. Return to your text field and click Insert again.",
+          "3. Quit and reopen Prompt Cabinet.",
+          "4. Return to your text field and click Insert again.",
+          "",
+          "If the switch is already on, choose Refresh Access and enable it again.",
           "",
           "The prompt has also been copied, so manual paste remains available.",
         ].join("\n"),
-    buttons: useChinese ? ["打开设置", "暂不"] : ["Open Settings", "Not Now"],
+    buttons: useChinese ? ["刷新授权", "打开设置", "暂不"] : ["Refresh Access", "Open Settings", "Not Now"],
     defaultId: 0,
-    cancelId: 1,
+    cancelId: 2,
     noLink: true,
   };
   const result = sourceWindow && !sourceWindow.isDestroyed()
     ? await dialog.showMessageBox(sourceWindow, options)
     : await dialog.showMessageBox(options);
-  if (result.response !== 0) return false;
+  if (result.response === 2) return false;
+
+  if (result.response === 0 && app.isPackaged) {
+    try {
+      await runSystemCommand("/usr/bin/tccutil", ["reset", "Accessibility", appBundleId]);
+    } catch (error) {
+      console.warn("Unable to reset Accessibility permission:", error?.message ?? error);
+    }
+  }
 
   systemPreferences.isTrustedAccessibilityClient(true);
   await wait(200);
   await shell.openExternal("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility");
   return true;
+}
+
+function isAccessibilityPermissionError(error) {
+  const message = String(error?.message ?? error ?? "");
+  return /assistive access|not allowed assistive|(-25211)/i.test(message);
+}
+
+function getNativePasteHelperPath() {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, "bin", "prompt-cabinet-paste")
+    : path.join(__dirname, "bin", "prompt-cabinet-paste");
 }
 
 async function insertTextIntoActiveApp(event, value, language = "en") {
@@ -1078,14 +1047,9 @@ async function insertTextIntoActiveApp(event, value, language = "en") {
   if (sourceWindow && !sourceWindow.isDestroyed()) sourceWindow.hide();
 
   try {
-    await wait(120);
+    await wait(220);
     if (process.platform === "darwin") {
-      await activateQuickInsertTarget();
-      await wait(160);
-      await runSystemCommand("/usr/bin/osascript", [
-        "-e",
-        'tell application "System Events" to keystroke "v" using command down',
-      ]);
+      await runSystemCommand(getNativePasteHelperPath(), []);
     } else if (process.platform === "win32") {
       await runSystemCommand("powershell.exe", [
         "-NoProfile",
@@ -1099,10 +1063,12 @@ async function insertTextIntoActiveApp(event, value, language = "en") {
     return { ok: true, copied: true, needsAccessibility: false };
   } catch (error) {
     console.warn("Prompt insertion fell back to clipboard:", error?.message ?? error);
-    if (process.platform === "darwin") {
+    const isMac = process.platform === "darwin";
+    const needsAccessibility = isMac && isAccessibilityPermissionError(error);
+    if (needsAccessibility) {
       await showAccessibilityGuide(undefined, language);
     }
-    return { ok: false, copied: true, needsAccessibility: process.platform === "darwin" };
+    return { ok: false, copied: true, needsAccessibility };
   } finally {
     await wait(100);
     if (sourceWindow && !sourceWindow.isDestroyed()) {

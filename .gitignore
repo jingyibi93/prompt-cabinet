@@ -5,6 +5,7 @@ release-portable/
 release-share*/
 
 *.tsbuildinfo
+electron/bin/prompt-cabinet-paste
 *.log
 
 prompt-cabinet-home*.png

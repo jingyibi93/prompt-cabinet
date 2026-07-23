@@ -8,11 +8,13 @@
   "main": "electron/main.cjs",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5177 --strictPort",
+    "marketing:dev": "python3 -m http.server 4189 --directory marketing-site",
     "build": "tsc -b && vite build",
+    "build:mac-paste-helper": "mkdir -p electron/bin && xcrun clang -framework ApplicationServices electron/native/paste_prompt.m -o electron/bin/prompt-cabinet-paste",
     "preview": "vite preview --host 127.0.0.1",
-    "desktop:dev": "npm run build && electron .",
+    "desktop:dev": "npm run build && pnpm run build:mac-paste-helper && electron .",
     "desktop:package": "npm run build && electron-builder --config.electronDist=node_modules/electron/dist",
-    "desktop:package:mac": "pnpm run build && electron-builder --mac dmg --arm64 --publish never --config.electronDist=node_modules/electron/dist",
+    "desktop:package:mac": "pnpm run build && pnpm run build:mac-paste-helper && electron-builder --mac dmg --arm64 --publish never --config.electronDist=node_modules/electron/dist",
     "desktop:unpacked": "npm run build && electron-builder --dir --config.electronDist=node_modules/electron/dist --config.directories.output=release-share",
     "desktop:portable": "npm run build && electron-builder --win portable --config.electronDist=node_modules/electron/dist --config.directories.output=release-share"
   },
@@ -36,6 +38,7 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
+      "!electron/bin/**/*",
       "package.json"
     ],
     "directories": {
@@ -44,6 +47,12 @@
     },
     "asarUnpack": [
       "node_modules/@openai/codex*/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "electron/bin/prompt-cabinet-paste",
+        "to": "bin/prompt-cabinet-paste"
+      }
     ],
     "mac": {
       "target": [
