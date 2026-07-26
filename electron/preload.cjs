@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld("promptCabinetApi", {
   testConnection: (settings) => ipcRenderer.invoke("prompt-cabinet:test-api-connection", settings),
   analyzePrompt: (payload) => ipcRenderer.invoke("prompt-cabinet:analyze-prompt", payload),
   matchImages: (payload) => ipcRenderer.invoke("prompt-cabinet:match-images", payload),
+  classifyPrompts: (payload) => ipcRenderer.invoke("prompt-cabinet:classify-prompts", payload),
 });
 
 contextBridge.exposeInMainWorld("promptCabinetWindow", {

@@ -467,7 +467,8 @@ button:disabled {
 }
 
 .bulk-import-auto-match,
-.bulk-import-ai-match {
+.bulk-import-ai-match,
+.bulk-import-ai-classify {
   min-height: 42px;
   padding: 0 14px;
   font-size: 0.82rem;

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import {
   analyzePromptWithApi,
+  classifyPromptsWithApi,
   defaultApiSettings,
   loadApiSettings,
   matchImagesWithApi,
@@ -150,6 +151,7 @@ function AppContent() {
   const [bulkImportNotice, setBulkImportNotice] = useState("");
   const [isReadingBulkFiles, setIsReadingBulkFiles] = useState(false);
   const [isAiMatchingBulkImages, setIsAiMatchingBulkImages] = useState(false);
+  const [isAiClassifyingBulkItems, setIsAiClassifyingBulkItems] = useState(false);
   const bulkImportInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -415,6 +417,70 @@ function AppContent() {
         ? t(`Matched ${newMatches} images by title or file name.`, `已按标题或文件名匹配 ${newMatches} 张图片。`)
         : t("No additional confident image matches were found.", "没有发现可可靠自动匹配的其他图片。"),
     );
+  }
+
+  async function aiClassifyBulkImportItems() {
+    if (!apiSettings.enabled || apiSettings.provider === "mock") {
+      setBulkImportNotice(t("Configure Local Codex or an OpenAI-compatible API in Analyze Settings first.", "请先在分析设置中配置本地 Codex 或兼容 OpenAI 的 API。"));
+      if (window.confirm(t("AI Smart Categorize needs Local Codex or an API connection. Open Analyze Settings now?", "AI 智能分类需要先连接本地 Codex 或 API。现在前往分析设置吗？"))) {
+        setIsBulkImportOpen(false);
+        setSettingsSection("analyze");
+        setView("settings");
+        setOpenDataMenu(null);
+      }
+      return;
+    }
+    const candidates = bulkImportItems.filter((item) => item.included && !item.categoryEdited).slice(0, 36);
+    if (!candidates.length) {
+      setBulkImportNotice(t("There are no auto-classified prompts left to improve.", "没有可供 AI 改进分类的自动分类 Prompt。"));
+      return;
+    }
+    const analyzerName = apiSettings.provider === "codex-local"
+      ? t("Local Codex", "本地 Codex")
+      : apiSettings.model || t("your configured API", "已配置的 API");
+    const confirmed = window.confirm(
+      t(
+        `Send ${candidates.length} prompt candidates to ${analyzerName} for smarter categorization? This may use your account or API quota.`,
+        `将 ${candidates.length} 条候选 Prompt 发送给 ${analyzerName} 进行智能分类吗？这可能会消耗账户或 API 额度。`,
+      ),
+    );
+    if (!confirmed) return;
+
+    setIsAiClassifyingBulkItems(true);
+    setBulkImportNotice(t("AI is improving prompt categories...", "AI 正在优化 Prompt 分类..."));
+    try {
+      const result = await classifyPromptsWithApi(
+        candidates.map((item) => ({ id: item.id, title: item.title, originalPrompt: item.originalPrompt })),
+        allCategories,
+        apiSettings,
+      );
+      const classificationsById = new Map(result.classifications.map((classification) => [classification.id, classification]));
+      setBulkImportItems((current) =>
+        current.map((item) => {
+          const classification = classificationsById.get(item.id);
+          if (!classification || item.categoryEdited) return item;
+          return {
+            ...item,
+            category: classification.category,
+            tags: mergeUnique(classification.tags, item.tags),
+          };
+        }),
+      );
+      setBulkImportNotice(
+        result.classifications.length
+          ? t(`AI improved ${result.classifications.length} prompt categories. You can still adjust any row manually.`, `AI 已优化 ${result.classifications.length} 条 Prompt 的分类，仍可逐条手动调整。`)
+          : t("AI did not return any usable categories. Try again or adjust the rows manually.", "AI 没有返回可用分类，请重试或逐条手动调整。"),
+      );
+    } catch (error) {
+      setBulkImportNotice(
+        t(
+          `AI classification failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+          `AI 智能分类失败：${error instanceof Error ? error.message : "未知错误"}`,
+        ),
+      );
+    } finally {
+      setIsAiClassifyingBulkItems(false);
+    }
   }
 
   async function aiMatchBulkImportImages() {
@@ -829,9 +895,11 @@ function AppContent() {
           onPickFiles={() => bulkImportInputRef.current?.click()}
           onUpdateItem={updateBulkImportItem}
           onAutoMatchImages={autoMatchBulkImportImages}
+          onAiClassify={() => void aiClassifyBulkImportItems()}
           onAiMatchImages={() => void aiMatchBulkImportImages()}
-          canAiMatchImages={apiSettings.enabled && apiSettings.provider !== "mock"}
+          canAiEnhanceImports={apiSettings.enabled && apiSettings.provider !== "mock"}
           isAiMatchingImages={isAiMatchingBulkImages}
+          isAiClassifyingItems={isAiClassifyingBulkItems}
           onImport={importBulkItems}
         />
       )}
@@ -859,9 +927,11 @@ function BulkImportWorkbench({
   onPickFiles,
   onUpdateItem,
   onAutoMatchImages,
+  onAiClassify,
   onAiMatchImages,
-  canAiMatchImages,
+  canAiEnhanceImports,
   isAiMatchingImages,
+  isAiClassifyingItems,
   onImport,
 }: {
   items: BulkImportItem[];
@@ -873,9 +943,11 @@ function BulkImportWorkbench({
   onPickFiles: () => void;
   onUpdateItem: (id: string, patch: Partial<BulkImportItem>) => void;
   onAutoMatchImages: () => void;
+  onAiClassify: () => void;
   onAiMatchImages: () => void;
-  canAiMatchImages: boolean;
+  canAiEnhanceImports: boolean;
   isAiMatchingImages: boolean;
+  isAiClassifyingItems: boolean;
   onImport: () => void;
 }) {
   const { t } = useLanguage();
@@ -911,13 +983,27 @@ function BulkImportWorkbench({
               {t("Auto-match Images", "自动匹配图片")}
             </button>
           )}
+          {items.length > 0 && (
+            <button
+              className="ghost-button bulk-import-ai-classify"
+              onClick={onAiClassify}
+              disabled={isAiClassifyingItems}
+              title={
+                canAiEnhanceImports
+                  ? t("Use Local Codex or your API to improve automatic categories", "使用本地 Codex 或 API 优化自动分类")
+                  : t("Configure Local Codex or an OpenAI-compatible API in Analyze Settings first", "请先在分析设置中配置本地 Codex 或兼容 OpenAI 的 API")
+              }
+            >
+              {isAiClassifyingItems ? t("AI classifying...", "AI 分类中...") : t("AI Smart Categorize", "AI 智能分类")}
+            </button>
+          )}
           {items.length > 0 && images.length > 0 && (
             <button
               className="ghost-button bulk-import-ai-match"
               onClick={onAiMatchImages}
-              disabled={!canAiMatchImages || isAiMatchingImages}
+              disabled={!canAiEnhanceImports || isAiMatchingImages}
               title={
-                canAiMatchImages
+                canAiEnhanceImports
                   ? t("Match only the remaining unlinked images with Local Codex or your vision API", "使用本地 Codex 或视觉 API 匹配剩余未关联图片")
                   : t("Configure Local Codex or an OpenAI-compatible vision API in Analyze Settings first", "请先在分析设置中配置本地 Codex 或兼容 OpenAI 的视觉 API")
               }
@@ -2427,7 +2513,7 @@ function ApiSettingsPage({
         {activeMode === "openai-compatible" && (
           <>
             <label>
-              Base URL
+              {t("Base URL (root or /v1)", "Base URL（根地址或 /v1 均可）")}
               <input
                 value={draft.baseUrl}
                 onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })}

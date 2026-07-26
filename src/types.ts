@@ -65,3 +65,13 @@ export type ImagePromptMatch = {
 export type ImagePromptMatchResult = {
   matches: ImagePromptMatch[];
 };
+
+export type PromptClassification = {
+  id: string;
+  category: PromptCategory;
+  tags: string[];
+};
+
+export type PromptClassificationResult = {
+  classifications: PromptClassification[];
+};

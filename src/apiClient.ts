@@ -1,5 +1,5 @@
 import type { AnalysisLanguageSetting } from "./i18n";
-import type { AnalyzeResult, ApiSettings, ImagePromptMatchResult } from "./types";
+import type { AnalyzeResult, ApiSettings, ImagePromptMatchResult, PromptClassificationResult, PromptCategory } from "./types";
 
 const SETTINGS_KEY = "prompt-cabinet-api-settings";
 
@@ -69,6 +69,21 @@ export async function matchImagesWithApi(
   return window.promptCabinetApi.matchImages({
     images,
     prompts,
+    settings: normalizeSettings(settings),
+  });
+}
+
+export async function classifyPromptsWithApi(
+  prompts: Array<{ id: string; title: string; originalPrompt: string }>,
+  categories: PromptCategory[],
+  settings: ApiSettings,
+): Promise<PromptClassificationResult> {
+  if (!window.promptCabinetApi) {
+    throw new Error("AI classification is available in the Electron desktop app only.");
+  }
+  return window.promptCabinetApi.classifyPrompts({
+    prompts,
+    categories,
     settings: normalizeSettings(settings),
   });
 }

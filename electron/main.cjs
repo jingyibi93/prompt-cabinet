@@ -93,6 +93,29 @@ const imageMatchOutputSchema = {
   },
 };
 
+function buildPromptClassificationOutputSchema(categories) {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["classifications"],
+    properties: {
+      classifications: {
+        type: "array",
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["id", "category", "tags"],
+          properties: {
+            id: { type: "string" },
+            category: { type: "string", enum: categories },
+            tags: { type: "array", items: { type: "string" } },
+          },
+        },
+      },
+    },
+  };
+}
+
 function getDataFilePath() {
   return path.join(app.getPath("userData"), dataFileName);
 }
@@ -286,10 +309,20 @@ function getProvider(settings) {
   return settings?.enabled ? "openai-compatible" : "mock";
 }
 
-function buildChatCompletionsUrl(baseUrl) {
+function buildChatCompletionsUrls(baseUrl) {
   const cleanBase = baseUrl.replace(/\/+$/, "");
-  if (cleanBase.endsWith("/chat/completions")) return cleanBase;
-  return `${cleanBase}/chat/completions`;
+  if (cleanBase.endsWith("/chat/completions")) return [cleanBase];
+
+  const directUrl = `${cleanBase}/chat/completions`;
+  try {
+    const parsed = new URL(cleanBase);
+    if (parsed.pathname === "" || parsed.pathname === "/") {
+      return [directUrl, `${cleanBase}/v1/chat/completions`];
+    }
+  } catch {
+    // Keep the direct request so the provider returns a useful URL error.
+  }
+  return [directUrl];
 }
 
 async function callChatCompletions(settings, messages, temperature = 0.2) {
@@ -297,30 +330,35 @@ async function callChatCompletions(settings, messages, temperature = 0.2) {
   if (!normalized.apiKey) throw new Error("Missing API key.");
   if (!normalized.model) throw new Error("Missing model.");
 
+  const requestBody = JSON.stringify({
+    model: normalized.model,
+    messages,
+    temperature,
+    response_format: { type: "json_object" },
+  });
   let response;
+  let text = "";
   try {
     // Electron's network stack follows the operating system proxy settings.
-    response = await net.fetch(buildChatCompletionsUrl(normalized.baseUrl), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${normalized.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: normalized.model,
-        messages,
-        temperature,
-        response_format: { type: "json_object" },
-      }),
-    });
+    for (const endpoint of buildChatCompletionsUrls(normalized.baseUrl)) {
+      response = await net.fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${normalized.apiKey}`,
+        },
+        body: requestBody,
+      });
+      text = await response.text();
+      if (response.status !== 404 && response.status !== 405) break;
+    }
   } catch (error) {
     const cause = error?.cause;
     const detail = cause?.code || cause?.message || error?.message || "Unknown network error";
     throw new Error(`Could not reach the API endpoint using the system network settings: ${detail}`);
   }
 
-  const text = await response.text();
-  if (!response.ok) {
+  if (!response?.ok) {
     throw new Error(`API request failed (${response.status}): ${text.slice(0, 500)}`);
   }
 
@@ -506,6 +544,70 @@ function normalizeImageMatches(result, images, prompts) {
         claimedImages.add(match.imageId);
         claimedPrompts.add(match.promptId);
         return true;
+      }),
+  };
+}
+
+async function classifyPromptsWithApi(_event, payload) {
+  const settings = normalizeApiSettings(payload?.settings);
+  if (!settings.enabled || settings.provider === "mock") {
+    throw new Error("Configure Local Codex or an API before AI classification.");
+  }
+
+  const prompts = Array.isArray(payload?.prompts)
+    ? payload.prompts
+        .filter((prompt) => typeof prompt?.id === "string" && typeof prompt?.originalPrompt === "string")
+        .slice(0, 36)
+    : [];
+  const categories = Array.isArray(payload?.categories)
+    ? [...new Set(payload.categories.map((category) => String(category).trim()).filter(Boolean))].slice(0, 24)
+    : [];
+  const availableCategories = categories.length ? categories : validCategories;
+  if (!prompts.length) return { classifications: [] };
+
+  const instruction = [
+    "Classify each candidate prompt into exactly one of the provided categories.",
+    "Classify by the prompt's intended reusable outcome, not by isolated keywords or the language it is written in.",
+    "Use Image for image-generation instructions and Video for video-generation instructions. Use Design for UI/UX, visual layout, graphic design direction, or design critique.",
+    "Return concise useful tags in the prompt's dominant language. Do not duplicate a tag or merely repeat the category name.",
+    "Return JSON only in this shape: {\"classifications\":[{\"id\":\"...\",\"category\":\"...\",\"tags\":[\"...\"]}]}",
+    `Available categories: ${availableCategories.join(", ")}`,
+    "",
+    ...prompts.map((prompt) => `PROMPT ${prompt.id}\nTitle: ${String(prompt.title || "Untitled").slice(0, 160)}\nText: ${prompt.originalPrompt.slice(0, 1400)}`),
+  ].join("\n\n");
+
+  const result = settings.provider === "codex-local"
+    ? await callLocalCodex(settings, instruction, buildPromptClassificationOutputSchema(availableCategories))
+    : await callChatCompletions(
+        settings,
+        [
+          { role: "system", content: "You are a precise prompt librarian. Return valid JSON only, with no explanation." },
+          { role: "user", content: instruction },
+        ],
+        0,
+      );
+  return normalizePromptClassifications(result, prompts, availableCategories);
+}
+
+function normalizePromptClassifications(result, prompts, categories) {
+  const promptIds = new Set(prompts.map((prompt) => prompt.id));
+  const validCategoryNames = new Set(categories);
+  const seen = new Set();
+  const classifications = Array.isArray(result?.classifications) ? result.classifications : [];
+  return {
+    classifications: classifications
+      .map((classification) => ({
+        id: typeof classification?.id === "string" ? classification.id : "",
+        category: typeof classification?.category === "string" ? classification.category.trim() : "",
+        tags: Array.isArray(classification?.tags) ? classification.tags.map(String) : [],
+      }))
+      .filter((classification) => promptIds.has(classification.id) && validCategoryNames.has(classification.category) && !seen.has(classification.id))
+      .map((classification) => {
+        seen.add(classification.id);
+        return {
+          ...classification,
+          tags: normalizeTags(classification.tags, classification.category),
+        };
       }),
   };
 }
@@ -1225,6 +1327,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("prompt-cabinet:test-api-connection", testApiConnection);
   ipcMain.handle("prompt-cabinet:analyze-prompt", analyzePromptWithApi);
   ipcMain.handle("prompt-cabinet:match-images", matchImagesWithApi);
+  ipcMain.handle("prompt-cabinet:classify-prompts", classifyPromptsWithApi);
   ipcMain.handle("prompt-cabinet:get-always-on-top", async (event) => {
     const window = BrowserWindow.fromWebContents(event.sender);
     return window ? window.isAlwaysOnTop() : (await readWindowSettings()).alwaysOnTop;
