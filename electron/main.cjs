@@ -21,6 +21,7 @@ const defaultQuickShortcutSettings = Object.freeze({
   insertSelected: "CommandOrControl+Enter",
   closeQuickAdd: "Escape",
 });
+if (!app.isPackaged) app.setName("Prompt Cabinet Dev");
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 let mainWindow;
 let mainWindowNormalBounds;
@@ -69,6 +70,26 @@ const connectionOutputSchema = {
   properties: {
     ok: { type: "boolean" },
     message: { type: "string" },
+  },
+};
+const imageMatchOutputSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["matches"],
+  properties: {
+    matches: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["imageId", "promptId", "confidence"],
+        properties: {
+          imageId: { type: "string" },
+          promptId: { type: "string" },
+          confidence: { type: "number" },
+        },
+      },
+    },
   },
 };
 
@@ -375,6 +396,118 @@ async function analyzePromptWithApi(_event, payload) {
       );
 
   return normalizeAnalyzeResult(result, rawPrompt, outputLanguage);
+}
+
+async function matchImagesWithApi(_event, payload) {
+  const settings = normalizeApiSettings(payload?.settings);
+  if (!settings.enabled || settings.provider === "mock") {
+    throw new Error("Configure Local Codex or a vision-capable API before matching images.");
+  }
+
+  const images = Array.isArray(payload?.images)
+    ? payload.images
+        .filter((image) => typeof image?.id === "string" && typeof image?.dataUrl === "string" && image.dataUrl.startsWith("data:image/"))
+        .slice(0, 12)
+    : [];
+  const prompts = Array.isArray(payload?.prompts)
+    ? payload.prompts
+        .filter((prompt) => typeof prompt?.id === "string" && typeof prompt?.originalPrompt === "string")
+        .slice(0, 36)
+    : [];
+  if (!images.length || !prompts.length) return { matches: [] };
+
+  const matchingInstruction = [
+    "Candidate prompts. Match each image to at most one prompt and only when the image is clearly a reference or intended result for that prompt.",
+    "Do not guess from a random filename. Use the visual content and prompt semantics.",
+    "Return JSON only in this shape: {\"matches\":[{\"imageId\":\"...\",\"promptId\":\"...\",\"confidence\":0.0}]}",
+    "Use confidence from 0 to 1. Include only matches with confidence at least 0.55.",
+    "",
+    ...prompts.map((prompt) => `PROMPT ${prompt.id}\nTitle: ${String(prompt.title || "Untitled").slice(0, 160)}\nText: ${prompt.originalPrompt.slice(0, 900)}`),
+  ].join("\n\n");
+
+  if (settings.provider === "codex-local") {
+    const result = await matchImagesWithLocalCodex(settings, matchingInstruction, images);
+    return normalizeImageMatches(result, images, prompts);
+  }
+
+  const content = [
+    {
+      type: "text",
+      text: matchingInstruction,
+    },
+    ...images.flatMap((image) => [
+      { type: "text", text: `IMAGE ${image.id}\nFilename: ${String(image.name || "Untitled image").slice(0, 160)}` },
+      { type: "image_url", image_url: { url: image.dataUrl, detail: "low" } },
+    ]),
+  ];
+  const result = await callChatCompletions(
+    settings,
+    [
+      {
+        role: "system",
+        content: "You are a precise visual librarian. Return valid JSON only, with no explanation.",
+      },
+      { role: "user", content },
+    ],
+    0,
+  );
+  return normalizeImageMatches(result, images, prompts);
+}
+
+async function matchImagesWithLocalCodex(settings, instruction, images) {
+  const directory = await fs.mkdtemp(path.join(app.getPath("temp"), "prompt-cabinet-image-match-"));
+  try {
+    const imageInputs = await Promise.all(
+      images.map(async (image, index) => [
+        { type: "text", text: `IMAGE ${image.id}\nFilename: ${String(image.name || "Untitled image").slice(0, 160)}` },
+        { type: "local_image", path: await writeMatchImageToTemp(directory, image, index) },
+      ]),
+    );
+    return await callLocalCodex(settings, [{ type: "text", text: instruction }, ...imageInputs.flat()], imageMatchOutputSchema);
+  } finally {
+    await fs.rm(directory, { recursive: true, force: true });
+  }
+}
+
+async function writeMatchImageToTemp(directory, image, index) {
+  const match = /^data:(image\/(?:png|jpe?g|webp|gif));base64,(.+)$/i.exec(image.dataUrl);
+  if (!match) throw new Error(`Unsupported image data for ${image.name || "an image"}.`);
+  const extension = match[1].toLowerCase() === "image/jpeg" ? "jpg" : match[1].split("/")[1].toLowerCase();
+  const filePath = path.join(directory, `${String(index + 1).padStart(2, "0")}-${sanitizeTempFileName(image.name)}.${extension}`);
+  await fs.writeFile(filePath, Buffer.from(match[2], "base64"));
+  return filePath;
+}
+
+function sanitizeTempFileName(value) {
+  const cleaned = String(value || "image")
+    .replace(/\.[^.]+$/, "")
+    .replace(/[^a-z0-9_-]+/gi, "-")
+    .replace(/^-+|-+$/g, "");
+  return (cleaned || "image").slice(0, 80);
+}
+
+function normalizeImageMatches(result, images, prompts) {
+  const imageIds = new Set(images.map((image) => image.id));
+  const promptIds = new Set(prompts.map((prompt) => prompt.id));
+  const claimedImages = new Set();
+  const claimedPrompts = new Set();
+  const matches = Array.isArray(result?.matches) ? result.matches : [];
+  return {
+    matches: matches
+      .map((match) => ({
+        imageId: typeof match?.imageId === "string" ? match.imageId : "",
+        promptId: typeof match?.promptId === "string" ? match.promptId : "",
+        confidence: Number(match?.confidence),
+      }))
+      .filter((match) => imageIds.has(match.imageId) && promptIds.has(match.promptId) && Number.isFinite(match.confidence))
+      .map((match) => ({ ...match, confidence: Math.max(0, Math.min(1, match.confidence)) }))
+      .filter((match) => {
+        if (match.confidence < 0.55 || claimedImages.has(match.imageId) || claimedPrompts.has(match.promptId)) return false;
+        claimedImages.add(match.imageId);
+        claimedPrompts.add(match.promptId);
+        return true;
+      }),
+  };
 }
 
 function buildAnalyzeSystemPrompt(outputLanguage = "auto") {
@@ -1091,6 +1224,7 @@ app.whenReady().then(async () => {
   ipcMain.handle("prompt-cabinet:save-api-settings", (_event, settings) => writeApiSettings(settings));
   ipcMain.handle("prompt-cabinet:test-api-connection", testApiConnection);
   ipcMain.handle("prompt-cabinet:analyze-prompt", analyzePromptWithApi);
+  ipcMain.handle("prompt-cabinet:match-images", matchImagesWithApi);
   ipcMain.handle("prompt-cabinet:get-always-on-top", async (event) => {
     const window = BrowserWindow.fromWebContents(event.sender);
     return window ? window.isAlwaysOnTop() : (await readWindowSettings()).alwaysOnTop;

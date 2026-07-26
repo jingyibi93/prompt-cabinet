@@ -55,3 +55,13 @@ export type AnalyzeResult = {
   expectedOutput: string;
   refinedPrompt: string;
 };
+
+export type ImagePromptMatch = {
+  imageId: string;
+  promptId: string;
+  confidence: number;
+};
+
+export type ImagePromptMatchResult = {
+  matches: ImagePromptMatch[];
+};

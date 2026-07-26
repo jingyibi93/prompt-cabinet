@@ -3,6 +3,7 @@ import {
   analyzePromptWithApi,
   defaultApiSettings,
   loadApiSettings,
+  matchImagesWithApi,
   saveApiSettings,
   testApiConnection,
 } from "./apiClient";
@@ -17,11 +18,28 @@ import {
 import type { ApiSettings, PromptCategory, PromptItem, QuickShortcutSettings, RewriteSegment } from "./types";
 
 type View = "dashboard" | "add" | "library" | "detail" | "edit" | "settings";
-type ImportMode = "all" | "category";
+type WorkspaceScope = "all" | "category";
 type SettingsSection = "analyze" | "shortcuts" | "language";
 type CustomCategory = {
   name: PromptCategory;
   color: string;
+};
+type BulkImportImage = {
+  id: string;
+  name: string;
+  dataUrl: string;
+};
+type BulkImportItem = {
+  id: string;
+  sourceName: string;
+  title: string;
+  originalPrompt: string;
+  category: PromptCategory;
+  categoryEdited?: boolean;
+  tags: string[];
+  previewImage?: string;
+  imageId: string;
+  included: boolean;
 };
 
 const tagTone = ["mint", "peach", "rose", "stone"];
@@ -125,8 +143,14 @@ function AppContent() {
   const [isCategoryDialogOpen, setIsCategoryDialogOpen] = useState(false);
   const [categoryDraft, setCategoryDraft] = useState("");
   const [categoryDraftColor, setCategoryDraftColor] = useState(categoryColorSwatches[0]);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const importModeRef = useRef<ImportMode>("all");
+  const [isBulkImportOpen, setIsBulkImportOpen] = useState(false);
+  const [isExportWorkbenchOpen, setIsExportWorkbenchOpen] = useState(false);
+  const [bulkImportItems, setBulkImportItems] = useState<BulkImportItem[]>([]);
+  const [bulkImportImages, setBulkImportImages] = useState<BulkImportImage[]>([]);
+  const [bulkImportNotice, setBulkImportNotice] = useState("");
+  const [isReadingBulkFiles, setIsReadingBulkFiles] = useState(false);
+  const [isAiMatchingBulkImages, setIsAiMatchingBulkImages] = useState(false);
+  const bulkImportInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     let isMounted = true;
@@ -226,7 +250,6 @@ function AppContent() {
       return matchesCategory && (!needle || haystack.includes(needle));
     });
   }, [categoryFilter, savedPrompts, query]);
-  const categoryPromptCount = savedPrompts.filter((prompt) => prompt.category === dataCategory).length;
 
   useEffect(() => {
     if (!allCategories.includes(dataCategory)) setDataCategory(allCategories[0] ?? "Product");
@@ -315,9 +338,7 @@ function AppContent() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  function exportPrompts(mode: "all" | "category") {
-    const exportedPrompts =
-      mode === "category" ? savedPrompts.filter((prompt) => prompt.category === dataCategory) : savedPrompts;
+  function downloadPromptExport(exportedPrompts: PromptItem[], mode: WorkspaceScope) {
     const payload = {
       app: "Prompt Cabinet",
       version: 1,
@@ -336,47 +357,170 @@ function AppContent() {
     URL.revokeObjectURL(url);
   }
 
-  function chooseImportFile(mode: ImportMode) {
-    importModeRef.current = mode;
-    fileInputRef.current?.click();
+  function openBulkImportWorkbench() {
+    setBulkImportNotice("");
+    setIsBulkImportOpen(true);
   }
 
-  async function importPrompts(file: File | undefined) {
-    if (!file) return;
+  function closeBulkImportWorkbench() {
+    setIsBulkImportOpen(false);
+    setBulkImportItems([]);
+    setBulkImportImages([]);
+    setBulkImportNotice("");
+  }
+
+  function closeExportWorkbench() {
+    setIsExportWorkbenchOpen(false);
+  }
+
+  async function addBulkImportFiles(fileList: FileList | null) {
+    const files = Array.from(fileList ?? []);
+    if (!files.length) return;
+    setIsReadingBulkFiles(true);
+    setBulkImportNotice("");
     try {
-      const text = await file.text();
-      const parsed = JSON.parse(text) as unknown;
-      const importedPrompts = normalizeImportedPrompts(parsed).map((prompt) => autoClassifyImportedPrompt(prompt));
-      if (!importedPrompts.length) {
-        window.alert(t("No valid prompts found in this JSON file.", "这个 JSON 文件中没有有效的 Prompt。"));
-        return;
-      }
-
-      if (importModeRef.current === "category") {
-        const targetCategory = getImportCategory(parsed, dataCategory);
-        const categoryPrompts = importedPrompts.map((prompt) =>
-          autoClassifyImportedPrompt({ ...prompt, category: targetCategory }, targetCategory),
-        );
-        const { prompts: mergedPrompts, added, updated } = mergeImportedPrompts(prompts, categoryPrompts);
-        setPrompts(mergedPrompts);
-        setSelectedId(categoryPrompts[0]?.id ?? mergedPrompts[0]?.id ?? "");
-        setCategoryFilter(targetCategory);
-        setView("library");
-        window.alert(t(`Imported ${categoryPrompts.length} prompts into ${targetCategory}. Added ${added}, updated ${updated}.`, `已导入 ${categoryPrompts.length} 条 Prompt 到 ${getCategoryLabel(targetCategory, t)}，新增 ${added} 条，更新 ${updated} 条。`));
-        return;
-      }
-
-      const { prompts: mergedPrompts, added, updated } = mergeImportedPrompts(prompts, importedPrompts);
-      setPrompts(mergedPrompts);
-      setSelectedId(importedPrompts[0]?.id ?? mergedPrompts[0]?.id ?? "");
-      setCategoryFilter("All");
-      setView("library");
-      window.alert(t(`Imported ${importedPrompts.length} prompts. Added ${added}, updated ${updated}.`, `已导入 ${importedPrompts.length} 条 Prompt，新增 ${added} 条，更新 ${updated} 条。`));
+      const parsed = await prepareBulkImportFiles(files);
+      const nextImages = mergeBulkImportImages(bulkImportImages, parsed.images);
+      const nextItems = autoAssignBulkImages(mergeBulkImportItems(bulkImportItems, parsed.items), nextImages).map(
+        autoClassifyBulkImportItem,
+      );
+      setBulkImportImages(nextImages);
+      setBulkImportItems(nextItems);
+      const message = [
+        parsed.items.length ? t(`Found ${parsed.items.length} prompt candidates.`, `识别到 ${parsed.items.length} 条候选 Prompt。`) : "",
+        parsed.images.length ? t(`Added ${parsed.images.length} images.`, `加入 ${parsed.images.length} 张图片。`) : "",
+        parsed.skippedCount ? t(`Skipped ${parsed.skippedCount} unsupported files.`, `跳过 ${parsed.skippedCount} 个不支持的文件。`) : "",
+      ]
+        .filter(Boolean)
+        .join(" ");
+      setBulkImportNotice(message || t("No prompt content was found in these files.", "这些文件中没有识别到 Prompt 内容。"));
     } catch {
-      window.alert(t("Could not import this JSON file. Please check the file format.", "无法导入这个 JSON 文件，请检查文件格式。"));
+      setBulkImportNotice(t("Some files could not be read. Try text, Markdown, JSON, CSV, or image files.", "部分文件无法读取。请尝试文本、Markdown、JSON、CSV 或图片文件。"));
     } finally {
-      if (fileInputRef.current) fileInputRef.current.value = "";
+      setIsReadingBulkFiles(false);
+      if (bulkImportInputRef.current) bulkImportInputRef.current.value = "";
     }
+  }
+
+  function updateBulkImportItem(id: string, patch: Partial<BulkImportItem>) {
+    setBulkImportItems((current) => current.map((item) => (item.id === id ? { ...item, ...patch } : item)));
+  }
+
+  function autoMatchBulkImportImages() {
+    const matchedItems = autoAssignBulkImages(bulkImportItems, bulkImportImages);
+    const newMatches = matchedItems.filter((item, index) => !bulkImportItems[index]?.imageId && item.imageId).length;
+    setBulkImportItems(matchedItems);
+    setBulkImportNotice(
+      newMatches
+        ? t(`Matched ${newMatches} images by title or file name.`, `已按标题或文件名匹配 ${newMatches} 张图片。`)
+        : t("No additional confident image matches were found.", "没有发现可可靠自动匹配的其他图片。"),
+    );
+  }
+
+  async function aiMatchBulkImportImages() {
+    if (!apiSettings.enabled || apiSettings.provider === "mock") {
+      setBulkImportNotice(t("Configure Local Codex or an OpenAI-compatible vision API in Analyze Settings first.", "请先在分析设置中配置本地 Codex 或兼容 OpenAI 的视觉 API。"));
+      return;
+    }
+    const linkedImageIds = new Set(bulkImportItems.map((item) => item.imageId).filter(Boolean));
+    const unmatchedImages = bulkImportImages.filter((image) => !linkedImageIds.has(image.id)).slice(0, 12);
+    const unmatchedPrompts = bulkImportItems.filter((item) => item.included && !item.imageId && !item.previewImage).slice(0, 36);
+    if (!unmatchedImages.length || !unmatchedPrompts.length) {
+      setBulkImportNotice(t("There are no unmatched images and prompts to compare.", "没有需要比较的未关联图片和 Prompt。"));
+      return;
+    }
+    const confirmed = window.confirm(
+      t(
+        `Send ${unmatchedImages.length} images and ${unmatchedPrompts.length} prompt candidates to ${apiSettings.model || "your configured API"} for visual matching? This may use API credits.`,
+        `将 ${unmatchedImages.length} 张图片和 ${unmatchedPrompts.length} 条候选 Prompt 发送给 ${apiSettings.model || "已配置的 API"} 进行视觉匹配吗？这会消耗 API 额度。`,
+      ),
+    );
+    if (!confirmed) return;
+
+    setIsAiMatchingBulkImages(true);
+    setBulkImportNotice(t("AI is comparing the unmatched images...", "AI 正在比较未关联的图片..."));
+    try {
+      const preparedImages = await Promise.all(
+        unmatchedImages.map(async (image) => ({ ...image, dataUrl: await createVisionThumbnail(image.dataUrl) })),
+      );
+      const result = await matchImagesWithApi(
+        preparedImages,
+        unmatchedPrompts.map((item) => ({ id: item.id, title: item.title, originalPrompt: item.originalPrompt })),
+        apiSettings,
+      );
+      const confidentMatches = result.matches.filter((match) => match.confidence >= 0.72);
+      const matchesByPrompt = new Map(confidentMatches.map((match) => [match.promptId, match.imageId]));
+      setBulkImportItems((current) =>
+        current.map((item) => (item.imageId || !matchesByPrompt.has(item.id) ? item : { ...item, imageId: matchesByPrompt.get(item.id) ?? "" })),
+      );
+      const uncertainCount = result.matches.length - confidentMatches.length;
+      setBulkImportNotice(
+        t(
+          `AI matched ${confidentMatches.length} images with high confidence${uncertainCount ? `; ${uncertainCount} lower-confidence matches were left for manual review.` : "."}`,
+          `AI 高置信度匹配了 ${confidentMatches.length} 张图片${uncertainCount ? `；另有 ${uncertainCount} 条低置信度结果保留给你手动确认。` : "。"}`,
+        ),
+      );
+    } catch (error) {
+      setBulkImportNotice(
+        t(
+          `AI image matching failed: ${error instanceof Error ? error.message : "Unknown error"}`,
+          `AI 图片匹配失败：${error instanceof Error ? error.message : "未知错误"}`,
+        ),
+      );
+    } finally {
+      setIsAiMatchingBulkImages(false);
+    }
+  }
+
+  function importBulkItems() {
+    const selected = bulkImportItems.filter((item) => item.included && item.originalPrompt.trim());
+    if (!selected.length) {
+      setBulkImportNotice(t("Select at least one prompt to import.", "请至少选择一条 Prompt 导入。"));
+      return;
+    }
+    const imagesById = new Map(bulkImportImages.map((image) => [image.id, image.dataUrl]));
+    const importedPrompts = selected.map((item) =>
+      autoClassifyImportedPrompt({
+        id: item.id,
+        status: "saved",
+        title: item.title.trim() || "Untitled Prompt",
+        originalPrompt: item.originalPrompt.trim(),
+        refinedPrompt: item.originalPrompt.trim(),
+        useCase: "",
+        inputNeeded: [],
+        expectedOutput: "",
+        tags: item.tags,
+        platform: "ChatGPT",
+        notes: `Imported from ${item.sourceName}`,
+        category: item.category,
+        createdAt: new Date().toISOString(),
+        previewImage: imagesById.get(item.imageId) ?? item.previewImage,
+      }, item.categoryEdited ? item.category : undefined),
+    );
+    const { prompts: mergedPrompts, added, updated } = mergeImportedPrompts(prompts, importedPrompts);
+    setPrompts(mergedPrompts);
+    setSelectedId(importedPrompts[0]?.id ?? mergedPrompts[0]?.id ?? "");
+    setCategoryFilter("All");
+    setView("library");
+    closeBulkImportWorkbench();
+    window.alert(t(`Imported ${selected.length} prompts. Added ${added}, updated ${updated}.`, `已导入 ${selected.length} 条 Prompt，新增 ${added} 条，更新 ${updated} 条。`));
+  }
+
+  function exportWorkspacePrompts(selectedIds: string[], mode: WorkspaceScope) {
+    const selected = savedPrompts.filter((prompt) => selectedIds.includes(prompt.id));
+    const exportedPrompts = mode === "category"
+      ? selected.filter((prompt) => prompt.category === dataCategory)
+      : selected;
+    if (!exportedPrompts.length) {
+      window.alert(
+        mode === "category"
+          ? t("Select at least one prompt in the chosen category.", "请至少勾选一条所选分类中的 Prompt。")
+          : t("Select at least one prompt to export.", "请至少勾选一条 Prompt 导出。"),
+      );
+      return;
+    }
+    downloadPromptExport(exportedPrompts, mode);
+    closeExportWorkbench();
   }
 
   async function toggleAlwaysOnTop() {
@@ -492,74 +636,27 @@ function AppContent() {
                     {t("Back", "返回")}
                   </button>
                 </div>
-                <div className="popover-section">
-                  <div className="popover-section-heading">
-                    <strong>{t("Full Library", "完整资料库")}</strong>
-                    <span>{t("All saved prompts across every category.", "所有分类中已保存的 Prompt。")}</span>
-                  </div>
-                  <div className="popover-split">
-                    <button
-                      className="popover-action"
-                      onClick={() => {
-                        chooseImportFile("all");
-                        setOpenDataMenu(null);
-                      }}
-                    >
-                      {t("Import All", "导入全部")}
-                    </button>
-                    <button
-                      className="popover-action"
-                      onClick={() => {
-                        exportPrompts("all");
-                        setOpenDataMenu(null);
-                      }}
-                      disabled={!prompts.length}
-                    >
-                      {t("Export All", "导出全部")}
-                    </button>
-                  </div>
-                </div>
-
-                <div className="popover-section">
-                  <div className="popover-section-heading">
-                    <strong>{t("Selected Category", "选中分类")}</strong>
-                    <span>{t("Only prompts filed under the category below.", "仅处理下方分类中的 Prompt。")}</span>
-                  </div>
-                  <label>
-                    {t("Category", "分类")}
-                    <select
-                      value={dataCategory}
-                      onChange={(event) => setDataCategory(event.target.value as PromptCategory)}
-                    >
-                      {allCategories.map((category) => (
-                        <option value={category} key={category}>
-                          {getCategoryLabel(category, t)}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <div className="popover-split">
-                    <button
-                      className="popover-action"
-                      onClick={() => {
-                        chooseImportFile("category");
-                        setOpenDataMenu(null);
-                      }}
-                    >
-                      {t("Import Into Selected", "导入到选中分类")}
-                    </button>
-                    <button
-                      className="popover-action"
-                      onClick={() => {
-                        exportPrompts("category");
-                        setOpenDataMenu(null);
-                      }}
-                      disabled={!categoryPromptCount}
-                    >
-                      {t("Export Selected", "导出选中分类")}
-                    </button>
-                  </div>
-                </div>
+                <button
+                  className="popover-action workspace-entry"
+                  onClick={() => {
+                    openBulkImportWorkbench();
+                    setOpenDataMenu(null);
+                  }}
+                >
+                  <span>{t("Import Workspace", "导入工作台")}</span>
+                  <small>{t("Preview files, match images, and choose a destination.", "预览文件、匹配图片并选择导入位置。")}</small>
+                </button>
+                <button
+                  className="popover-action workspace-entry"
+                  onClick={() => {
+                    setIsExportWorkbenchOpen(true);
+                    setOpenDataMenu(null);
+                  }}
+                  disabled={!savedPrompts.length}
+                >
+                  <span>{t("Export Workspace", "导出工作台")}</span>
+                  <small>{t("Preview and select prompts before downloading JSON.", "预览并勾选 Prompt 后再下载 JSON。")}</small>
+                </button>
               </div>
             )}
           </div>
@@ -582,11 +679,12 @@ function AppContent() {
           </div>
         </nav>
         <input
-          ref={fileInputRef}
+          ref={bulkImportInputRef}
           className="hidden-file-input"
           type="file"
-          accept="application/json,.json"
-          onChange={(event) => void importPrompts(event.target.files?.[0])}
+          accept=".txt,.md,.markdown,.json,.csv,text/plain,text/markdown,application/json,text/csv,image/*"
+          multiple
+          onChange={(event) => void addBulkImportFiles(event.target.files)}
         />
       </header>
 
@@ -720,6 +818,345 @@ function AppContent() {
           </section>
         </div>
       )}
+      {isBulkImportOpen && (
+        <BulkImportWorkbench
+          items={bulkImportItems}
+          images={bulkImportImages}
+          categories={allCategories}
+          notice={bulkImportNotice}
+          isReading={isReadingBulkFiles}
+          onClose={closeBulkImportWorkbench}
+          onPickFiles={() => bulkImportInputRef.current?.click()}
+          onUpdateItem={updateBulkImportItem}
+          onAutoMatchImages={autoMatchBulkImportImages}
+          onAiMatchImages={() => void aiMatchBulkImportImages()}
+          canAiMatchImages={apiSettings.enabled && apiSettings.provider !== "mock"}
+          isAiMatchingImages={isAiMatchingBulkImages}
+          onImport={importBulkItems}
+        />
+      )}
+      {isExportWorkbenchOpen && (
+        <ExportWorkbench
+          prompts={savedPrompts}
+          categories={allCategories}
+          selectedCategory={dataCategory}
+          onSelectedCategoryChange={setDataCategory}
+          onClose={closeExportWorkbench}
+          onExport={exportWorkspacePrompts}
+        />
+      )}
+    </div>
+  );
+}
+
+function BulkImportWorkbench({
+  items,
+  images,
+  categories,
+  notice,
+  isReading,
+  onClose,
+  onPickFiles,
+  onUpdateItem,
+  onAutoMatchImages,
+  onAiMatchImages,
+  canAiMatchImages,
+  isAiMatchingImages,
+  onImport,
+}: {
+  items: BulkImportItem[];
+  images: BulkImportImage[];
+  categories: PromptCategory[];
+  notice: string;
+  isReading: boolean;
+  onClose: () => void;
+  onPickFiles: () => void;
+  onUpdateItem: (id: string, patch: Partial<BulkImportItem>) => void;
+  onAutoMatchImages: () => void;
+  onAiMatchImages: () => void;
+  canAiMatchImages: boolean;
+  isAiMatchingImages: boolean;
+  onImport: () => void;
+}) {
+  const { t } = useLanguage();
+  const selectedCount = items.filter((item) => item.included).length;
+  const [editingCategoryId, setEditingCategoryId] = useState("");
+
+  return (
+    <div className="modal-backdrop bulk-import-backdrop" role="presentation" onMouseDown={onClose}>
+      <section
+        className="bulk-import-workbench lift-card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="bulk-import-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header className="bulk-import-header">
+          <div>
+            <p className="eyebrow">{t("Import workspace", "导入工作台")}</p>
+            <h2 id="bulk-import-title">{t("Collect prompt files", "批量收集 Prompt 文件")}</h2>
+            <p>{t("Choose only the files you want to collect. Everything is read locally.", "只读取你主动选择的文件，所有识别都在本地完成。")}</p>
+          </div>
+          <button className="bulk-import-close" onClick={onClose} aria-label={t("Close", "关闭")} title={t("Close", "关闭")}>
+            ×
+          </button>
+        </header>
+
+        <div className="bulk-import-toolbar">
+          <button className="pressable" onClick={onPickFiles} disabled={isReading}>
+            {isReading ? t("Reading files...", "正在读取文件...") : t("Choose Files", "选择文件")}
+          </button>
+          {items.length > 0 && images.length > 0 && (
+            <button className="ghost-button bulk-import-auto-match" onClick={onAutoMatchImages}>
+              {t("Auto-match Images", "自动匹配图片")}
+            </button>
+          )}
+          {items.length > 0 && images.length > 0 && (
+            <button
+              className="ghost-button bulk-import-ai-match"
+              onClick={onAiMatchImages}
+              disabled={!canAiMatchImages || isAiMatchingImages}
+              title={
+                canAiMatchImages
+                  ? t("Match only the remaining unlinked images with Local Codex or your vision API", "使用本地 Codex 或视觉 API 匹配剩余未关联图片")
+                  : t("Configure Local Codex or an OpenAI-compatible vision API in Analyze Settings first", "请先在分析设置中配置本地 Codex 或兼容 OpenAI 的视觉 API")
+              }
+            >
+              {isAiMatchingImages ? t("AI matching...", "AI 匹配中...") : t("AI Match Unlinked Images", "AI 匹配未关联图片")}
+            </button>
+          )}
+          <span>{t("Text, Markdown, JSON, CSV, and images", "文本、Markdown、JSON、CSV 与图片")}</span>
+          <span>{t(`${selectedCount} selected`, `已选择 ${selectedCount} 条`)}</span>
+        </div>
+
+        {notice && <p className="bulk-import-notice">{notice}</p>}
+
+        {!items.length ? (
+          <div className="bulk-import-empty">
+            <strong>{t("Start with a folder of prompt files", "从一组 Prompt 文件开始")}</strong>
+            <span>{t("Files with matching names are linked automatically, for example campaign.md and campaign.png.", "同名文件会自动关联，例如 campaign.md 与 campaign.png。")}</span>
+          </div>
+        ) : (
+          <div className="bulk-import-list" aria-label={t("Prompt candidates", "候选 Prompt")}>
+            {items.map((item) => {
+              const image = images.find((candidate) => candidate.id === item.imageId);
+              return (
+                <article className={item.included ? "bulk-import-row included" : "bulk-import-row"} key={item.id}>
+                  <label className="bulk-import-toggle">
+                    <input
+                      type="checkbox"
+                      checked={item.included}
+                      onChange={(event) => onUpdateItem(item.id, { included: event.target.checked })}
+                      aria-label={t(`Include ${item.title || "prompt"}`, `导入 ${item.title || "Prompt"}`)}
+                    />
+                  </label>
+                  <div className="bulk-import-main">
+                    <div className="bulk-import-fields">
+                      <input
+                        value={item.title}
+                        onChange={(event) => onUpdateItem(item.id, { title: event.target.value })}
+                        aria-label={t("Prompt title", "Prompt 标题")}
+                        placeholder={t("Prompt title", "Prompt 标题")}
+                      />
+                      {editingCategoryId === item.id ? (
+                        <select
+                          className="bulk-import-category-select"
+                          value={item.category}
+                          onChange={(event) => {
+                            onUpdateItem(item.id, { category: event.target.value, categoryEdited: true });
+                            setEditingCategoryId("");
+                          }}
+                          onBlur={() => setEditingCategoryId("")}
+                          aria-label={t("Category", "分类")}
+                          autoFocus
+                        >
+                          {categories.map((category) => (
+                            <option key={category} value={category}>
+                              {getCategoryLabel(category, t)}
+                            </option>
+                          ))}
+                        </select>
+                      ) : (
+                        <button
+                          className="bulk-import-category-chip"
+                          onClick={() => setEditingCategoryId(item.id)}
+                          title={t("Click to adjust the inferred category", "点击调整自动推断的分类")}
+                        >
+                          <span>{item.categoryEdited ? t("Edited", "已调整") : t("Auto", "自动")}</span>
+                          {getCategoryLabel(item.category, t)}
+                        </button>
+                      )}
+                    </div>
+                    <p className="bulk-import-source">{item.sourceName}</p>
+                    <p className="bulk-import-preview">{item.originalPrompt}</p>
+                  </div>
+                  <div className="bulk-import-image-control">
+                    {image ? <img src={image.dataUrl} alt="" /> : item.previewImage ? <img src={item.previewImage} alt="" /> : <span>{t("No image", "无图片")}</span>}
+                    <select
+                      value={item.imageId}
+                      onChange={(event) => onUpdateItem(item.id, { imageId: event.target.value })}
+                      aria-label={t("Reference image", "参考图片")}
+                    >
+                      <option value="">{item.previewImage ? t("Embedded image", "内嵌图片") : t("No image", "无图片")}</option>
+                      {images.map((candidate) => (
+                        <option key={candidate.id} value={candidate.id}>
+                          {candidate.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        )}
+
+        <footer className="bulk-import-footer">
+          <span className="bulk-workspace-hint">
+            {t("Each prompt keeps the category shown in its row.", "每条 Prompt 会保留所在行显示的分类。")}
+          </span>
+          <div className="form-actions">
+            <button className="pressable" onClick={onImport} disabled={!selectedCount}>
+              {t(`Import ${selectedCount} Prompts`, `导入 ${selectedCount} 条 Prompt`)}
+            </button>
+            <button className="ghost-button" onClick={onClose}>
+              {t("Cancel", "取消")}
+            </button>
+          </div>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function ExportWorkbench({
+  prompts,
+  categories,
+  selectedCategory,
+  onSelectedCategoryChange,
+  onClose,
+  onExport,
+}: {
+  prompts: PromptItem[];
+  categories: PromptCategory[];
+  selectedCategory: PromptCategory;
+  onSelectedCategoryChange: (category: PromptCategory) => void;
+  onClose: () => void;
+  onExport: (selectedIds: string[], mode: WorkspaceScope) => void;
+}) {
+  const { t } = useLanguage();
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set(prompts.map((prompt) => prompt.id)));
+  const selectedCount = selectedIds.size;
+  const selectedCategoryCount = prompts.filter((prompt) => prompt.category === selectedCategory && selectedIds.has(prompt.id)).length;
+
+  function togglePrompt(id: string) {
+    setSelectedIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function selectAll() {
+    setSelectedIds(new Set(prompts.map((prompt) => prompt.id)));
+  }
+
+  function clearSelection() {
+    setSelectedIds(new Set());
+  }
+
+  function selectCategory(category: PromptCategory) {
+    onSelectedCategoryChange(category);
+    setSelectedIds(new Set(prompts.filter((prompt) => prompt.category === category).map((prompt) => prompt.id)));
+  }
+
+  return (
+    <div className="modal-backdrop bulk-import-backdrop" role="presentation" onMouseDown={onClose}>
+      <section
+        className="bulk-import-workbench export-workbench lift-card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="export-workbench-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header className="bulk-import-header">
+          <div>
+            <p className="eyebrow">{t("Export workspace", "导出工作台")}</p>
+            <h2 id="export-workbench-title">{t("Export saved prompts", "导出已保存的 Prompt")}</h2>
+            <p>{t("Review the prompts you want to include before downloading a JSON backup.", "下载 JSON 备份前，先预览并勾选要包含的 Prompt。")}</p>
+          </div>
+          <button className="bulk-import-close" onClick={onClose} aria-label={t("Close", "关闭")} title={t("Close", "关闭")}>
+            ×
+          </button>
+        </header>
+
+        <div className="bulk-import-toolbar export-workbench-toolbar">
+          <button className="ghost-button bulk-import-auto-match" onClick={selectAll} disabled={selectedCount === prompts.length}>
+            {t("Select All", "全选")}
+          </button>
+          <button className="ghost-button bulk-import-auto-match" onClick={clearSelection} disabled={!selectedCount}>
+            {t("Clear", "取消全选")}
+          </button>
+          <span>{t("Images and prompt details are included in the JSON.", "JSON 会包含图片和 Prompt 详细信息。")}</span>
+          <span>{t(`${selectedCount} selected`, `已选择 ${selectedCount} 条`)}</span>
+        </div>
+
+        <div className="export-workbench-list" aria-label={t("Saved prompts to export", "待导出的已保存 Prompt")}>
+          {prompts.map((prompt) => (
+            <article className={selectedIds.has(prompt.id) ? "export-workbench-row included" : "export-workbench-row"} key={prompt.id}>
+              <label className="bulk-import-toggle">
+                <input
+                  type="checkbox"
+                  checked={selectedIds.has(prompt.id)}
+                  onChange={() => togglePrompt(prompt.id)}
+                  aria-label={t(`Include ${prompt.title || "prompt"}`, `导出 ${prompt.title || "Prompt"}`)}
+                />
+              </label>
+              {prompt.previewImage ? (
+                <img className="export-workbench-image" src={prompt.previewImage} alt="" />
+              ) : (
+                <span className="export-workbench-image export-workbench-placeholder">{getCategoryLabel(prompt.category, t)}</span>
+              )}
+              <div className="export-workbench-main">
+                <div className="export-workbench-title-row">
+                  <strong>{prompt.title || t("Untitled Prompt", "未命名 Prompt")}</strong>
+                  <span className="export-workbench-category">{getCategoryLabel(prompt.category, t)}</span>
+                </div>
+                <p>{(prompt.refinedPrompt || prompt.originalPrompt).replace(/\s+/g, " ")}</p>
+                {prompt.tags.length > 0 && <TagList tags={prompt.tags.slice(0, 4)} />}
+              </div>
+            </article>
+          ))}
+        </div>
+
+        <footer className="bulk-import-footer export-workbench-footer">
+          <span className="bulk-workspace-hint">
+            {t("Export all respects the checked prompts across every category.", "导出全部会导出所有已勾选 Prompt。")}
+          </span>
+          <div className="form-actions">
+            <label className="workspace-category-control">
+              <span>{t("Selected Category", "选中分类")}</span>
+              <select value={selectedCategory} onChange={(event) => selectCategory(event.target.value)}>
+                {categories.map((category) => (
+                  <option key={category} value={category}>
+                    {getCategoryLabel(category, t)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button className="pressable" onClick={() => onExport([...selectedIds], "category")} disabled={!selectedCategoryCount}>
+              {t(`Export Selected Category (${selectedCategoryCount})`, `导出选中分类 (${selectedCategoryCount})`)}
+            </button>
+            <button className="pressable" onClick={() => onExport([...selectedIds], "all")} disabled={!selectedCount}>
+              {t(`Export All (${selectedCount})`, `导出全部 (${selectedCount})`)}
+            </button>
+            <button className="ghost-button" onClick={onClose}>
+              {t("Cancel", "取消")}
+            </button>
+          </div>
+        </footer>
+      </section>
     </div>
   );
 }
@@ -2100,13 +2537,307 @@ function formatShortcut(shortcut: string) {
     .join(" + ");
 }
 
-function getImportCategory(input: unknown, fallback: PromptCategory): PromptCategory {
-  if (isRecord(input) && typeof input.category === "string") {
-    const normalizedCategory =
-      input.category === "Portfolio" ? "Design" : input.category === "Codex" ? "Coding" : input.category;
-    return normalizedCategory.trim() || fallback;
+async function prepareBulkImportFiles(files: File[]) {
+  const imageFiles = files.filter(isImageFile);
+  const contentFiles = files.filter((file) => !isImageFile(file));
+  const imageResults = await Promise.all(
+    imageFiles.map(async (file) => ({
+      id: crypto.randomUUID(),
+      name: file.name,
+      dataUrl: await readFileAsDataUrl(file),
+    })),
+  );
+  const itemResults = await Promise.all(contentFiles.map((file) => readBulkImportFile(file)));
+  const items = itemResults.flat();
+  const supportedFileCount = imageFiles.length + contentFiles.filter(isBulkImportTextFile).length;
+  return {
+    images: imageResults,
+    items: autoAssignBulkImages(items, imageResults),
+    skippedCount: Math.max(0, files.length - supportedFileCount),
+  };
+}
+
+function mergeBulkImportImages(current: BulkImportImage[], incoming: BulkImportImage[]) {
+  const seen = new Set(current.map((image) => `${normalizeFileStem(image.name)}:${image.dataUrl.length}`));
+  const merged = [...current];
+  incoming.forEach((image) => {
+    const key = `${normalizeFileStem(image.name)}:${image.dataUrl.length}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    merged.push(image);
+  });
+  return merged;
+}
+
+function mergeBulkImportItems(current: BulkImportItem[], incoming: BulkImportItem[]) {
+  const seen = new Set(current.map((item) => getBulkImportFingerprint(item)));
+  const merged = [...current];
+  incoming.forEach((item) => {
+    const key = getBulkImportFingerprint(item);
+    if (seen.has(key)) return;
+    seen.add(key);
+    merged.push(item);
+  });
+  return merged;
+}
+
+function getBulkImportFingerprint(item: BulkImportItem) {
+  return `${item.sourceName}:${item.originalPrompt.trim().replace(/\s+/g, " ").toLowerCase()}`;
+}
+
+function autoAssignBulkImages(items: BulkImportItem[], images: BulkImportImage[]) {
+  const usedImageIds = new Set(items.map((item) => item.imageId).filter(Boolean));
+  return items.map((item) => {
+    if (item.imageId || item.previewImage) return item;
+    const candidates = images
+      .filter((image) => !usedImageIds.has(image.id))
+      .map((image) => ({ image, score: scoreBulkImageMatch(item, image) }))
+      .sort((left, right) => right.score - left.score);
+    const best = candidates[0];
+    const runnerUp = candidates[1];
+    const hasClearWinner = best && best.score >= 0.78 && (!runnerUp || best.score - runnerUp.score >= 0.12);
+    if (!hasClearWinner) return item;
+    usedImageIds.add(best.image.id);
+    return { ...item, imageId: best.image.id };
+  });
+}
+
+function scoreBulkImageMatch(item: BulkImportItem, image: BulkImportImage) {
+  const imageName = image.name;
+  return Math.max(
+    scoreBulkMatchText(item.title, imageName),
+    scoreBulkMatchText(item.sourceName, imageName),
+  );
+}
+
+function scoreBulkMatchText(left: string, right: string) {
+  const leftCompact = normalizeBulkMatchText(left);
+  const rightCompact = normalizeBulkMatchText(right);
+  if (!leftCompact || !rightCompact) return 0;
+  if (leftCompact === rightCompact) return 1;
+  if (Math.min(leftCompact.length, rightCompact.length) >= 7 && (leftCompact.includes(rightCompact) || rightCompact.includes(leftCompact))) {
+    return 0.86;
   }
-  return fallback;
+
+  const leftWords = getBulkMatchWords(left);
+  const rightWords = getBulkMatchWords(right);
+  const sharedWords = leftWords.filter((word) => rightWords.includes(word));
+  if (sharedWords.length < 2) return 0;
+  return sharedWords.length / Math.max(leftWords.length, rightWords.length);
+}
+
+function normalizeBulkMatchText(value: string) {
+  return value
+    .replace(/\.[^.]+$/, "")
+    .toLocaleLowerCase()
+    .replace(/\b(prompt|image|img|copy|final|draft|version|v\d+)\b/g, "")
+    .replace(/[^a-z0-9\u4e00-\u9fff]+/g, "");
+}
+
+function getBulkMatchWords(value: string) {
+  return normalizeBulkMatchText(value)
+    .split(" ")
+    .map((word) => word.trim())
+    .filter((word) => word.length > 1);
+}
+
+function autoClassifyBulkImportItem(item: BulkImportItem): BulkImportItem {
+  if (item.categoryEdited) return item;
+  const analyzed = analyzePrompt(item.originalPrompt, "", { tags: item.tags });
+  return {
+    ...item,
+    category: analyzed.category,
+    tags: mergeUnique(analyzed.tags, item.tags),
+  };
+}
+
+async function readBulkImportFile(file: File): Promise<BulkImportItem[]> {
+  if (!isBulkImportTextFile(file)) return [];
+  const text = await file.text();
+  const extension = getFileExtension(file.name);
+  if (extension === "json") return parseBulkJson(text, file.name);
+  if (extension === "csv") return parseBulkCsv(text, file.name);
+  return parseBulkText(text, file.name);
+}
+
+function parseBulkJson(text: string, sourceName: string) {
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    const normalized = normalizeImportedPrompts(parsed);
+    if (normalized.length) return normalized.map((prompt) => promptToBulkImportItem(prompt, sourceName));
+    const rawItems = Array.isArray(parsed)
+      ? parsed
+      : isRecord(parsed) && Array.isArray(parsed.prompts)
+        ? parsed.prompts
+        : [parsed];
+    return rawItems.map((item, index) => genericValueToBulkItem(item, sourceName, index)).filter(Boolean) as BulkImportItem[];
+  } catch {
+    return [];
+  }
+}
+
+function parseBulkCsv(text: string, sourceName: string) {
+  const rows = parseCsv(text);
+  if (rows.length < 2) return [];
+  const headers = rows[0].map((header) => header.trim().toLowerCase());
+  return rows.slice(1).map((row, index) => {
+    const record = Object.fromEntries(headers.map((header, column) => [header, row[column] ?? ""]));
+    return genericValueToBulkItem(record, sourceName, index);
+  }).filter(Boolean) as BulkImportItem[];
+}
+
+function parseBulkText(text: string, sourceName: string) {
+  return text
+    .split(/\n\s*(?:-{3,}|_{3,}|\*{3,})\s*\n/g)
+    .map((block, index) => createBulkTextItem(block, sourceName, index))
+    .filter(Boolean) as BulkImportItem[];
+}
+
+function promptToBulkImportItem(prompt: PromptItem, sourceName: string): BulkImportItem {
+  return {
+    id: crypto.randomUUID(),
+    sourceName,
+    title: prompt.title,
+    originalPrompt: prompt.originalPrompt,
+    category: prompt.category || "Product",
+    tags: prompt.tags ?? [],
+    previewImage: prompt.previewImage,
+    imageId: "",
+    included: true,
+  };
+}
+
+function genericValueToBulkItem(value: unknown, sourceName: string, index: number) {
+  if (typeof value === "string") return createBulkTextItem(value, sourceName, index);
+  if (!isRecord(value)) return undefined;
+  const originalPrompt = [value.originalPrompt, value.originalprompt, value.prompt, value.content, value.text]
+    .find((item): item is string => typeof item === "string" && item.trim().length > 0)
+    ?.trim();
+  if (!originalPrompt) return undefined;
+  const title = typeof value.title === "string" && value.title.trim() ? value.title.trim() : getBulkTitle(originalPrompt, sourceName, index);
+  const tags = Array.isArray(value.tags)
+    ? value.tags.map(String).map((tag) => tag.trim()).filter(Boolean)
+    : typeof value.tags === "string"
+      ? value.tags.split(",").map((tag) => tag.trim()).filter(Boolean)
+      : [];
+  return {
+    id: crypto.randomUUID(),
+    sourceName,
+    title,
+    originalPrompt,
+    category: typeof value.category === "string" && value.category.trim() ? value.category.trim() : "Product",
+    tags,
+    previewImage: typeof value.previewImage === "string" && value.previewImage.startsWith("data:image/") ? value.previewImage : undefined,
+    imageId: "",
+    included: true,
+  } satisfies BulkImportItem;
+}
+
+function createBulkTextItem(block: string, sourceName: string, index: number) {
+  const trimmed = block.trim();
+  if (!trimmed) return undefined;
+  const heading = trimmed.match(/^#\s+(.+)\n+([\s\S]*)$/);
+  const originalPrompt = (heading?.[2] || trimmed).trim();
+  if (!originalPrompt) return undefined;
+  return {
+    id: crypto.randomUUID(),
+    sourceName,
+    title: heading?.[1].trim() || getBulkTitle(originalPrompt, sourceName, index),
+    originalPrompt,
+    category: "Product",
+    tags: [],
+    imageId: "",
+    included: true,
+  } satisfies BulkImportItem;
+}
+
+function getBulkTitle(prompt: string, sourceName: string, index: number) {
+  const sourceTitle = normalizeFileStem(sourceName).replace(/[-_]+/g, " ").trim();
+  if (sourceTitle && index === 0) return sourceTitle;
+  const firstLine = prompt.split("\n").find((line) => line.trim())?.trim() ?? "";
+  return firstLine.slice(0, 64) || `Imported Prompt ${index + 1}`;
+}
+
+function parseCsv(text: string) {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let value = "";
+  let inQuotes = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    const nextCharacter = text[index + 1];
+    if (character === '"' && inQuotes && nextCharacter === '"') {
+      value += '"';
+      index += 1;
+    } else if (character === '"') {
+      inQuotes = !inQuotes;
+    } else if (character === "," && !inQuotes) {
+      row.push(value);
+      value = "";
+    } else if ((character === "\n" || character === "\r") && !inQuotes) {
+      if (character === "\r" && nextCharacter === "\n") index += 1;
+      row.push(value);
+      if (row.some((cell) => cell.trim())) rows.push(row);
+      row = [];
+      value = "";
+    } else {
+      value += character;
+    }
+  }
+  row.push(value);
+  if (row.some((cell) => cell.trim())) rows.push(row);
+  return rows;
+}
+
+function isBulkImportTextFile(file: File) {
+  return ["txt", "md", "markdown", "json", "csv"].includes(getFileExtension(file.name));
+}
+
+function isImageFile(file: File) {
+  return file.type.startsWith("image/") || ["png", "jpg", "jpeg", "webp", "gif", "avif", "heic"].includes(getFileExtension(file.name));
+}
+
+function getFileExtension(name: string) {
+  return name.split(".").at(-1)?.toLowerCase() ?? "";
+}
+
+function normalizeFileStem(name: string) {
+  return name.replace(/\.[^.]+$/, "").trim().toLowerCase();
+}
+
+function readFileAsDataUrl(file: File) {
+  return new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => (typeof reader.result === "string" ? resolve(reader.result) : reject(new Error("Image could not be read")));
+    reader.onerror = () => reject(reader.error ?? new Error("Image could not be read"));
+    reader.readAsDataURL(file);
+  });
+}
+
+function createVisionThumbnail(dataUrl: string) {
+  return new Promise<string>((resolve) => {
+    const image = new Image();
+    image.onload = () => {
+      const longestSide = Math.max(image.naturalWidth, image.naturalHeight);
+      if (!longestSide || longestSide <= 768) {
+        resolve(dataUrl);
+        return;
+      }
+      const scale = 768 / longestSide;
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+      const context = canvas.getContext("2d");
+      if (!context) {
+        resolve(dataUrl);
+        return;
+      }
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL("image/jpeg", 0.82));
+    };
+    image.onerror = () => resolve(dataUrl);
+    image.src = dataUrl;
+  });
 }
 
 function autoClassifyImportedPrompt(prompt: PromptItem, forcedCategory?: PromptCategory): PromptItem {
@@ -2342,6 +3073,7 @@ function PromptDetail({
             aria-label="Custom prompt to copy"
           />
         </section>
+        {prompt.previewImage && <PromptReferenceImage image={prompt.previewImage} title={prompt.title} />}
         <section className="detail-section lift-card">
           <h2>{t("Tags", "标签")}</h2>
           <TagList tags={prompt.tags} />
@@ -2641,6 +3373,18 @@ function DetailSection({ title, body, featured = false }: { title: string; body:
     <section className={`detail-section lift-card ${featured ? "featured" : ""}`}>
       <h2>{title}</h2>
       <p>{body}</p>
+    </section>
+  );
+}
+
+function PromptReferenceImage({ image, title }: { image: string; title: string }) {
+  const { t } = useLanguage();
+  return (
+    <section className="detail-section lift-card prompt-reference-image-section">
+      <h2>{t("Reference Image", "参考图片")}</h2>
+      <div className="prompt-reference-image-frame">
+        <img src={image} alt={t(`Reference image for ${title}`, `${title} 的参考图片`)} />
+      </div>
     </section>
   );
 }

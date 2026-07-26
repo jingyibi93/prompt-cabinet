@@ -1,5 +1,5 @@
 import type { AnalysisLanguageSetting } from "./i18n";
-import type { AnalyzeResult, ApiSettings } from "./types";
+import type { AnalyzeResult, ApiSettings, ImagePromptMatchResult } from "./types";
 
 const SETTINGS_KEY = "prompt-cabinet-api-settings";
 
@@ -55,6 +55,21 @@ export async function analyzePromptWithApi(
     notes,
     settings: normalizeSettings(settings),
     outputLanguage,
+  });
+}
+
+export async function matchImagesWithApi(
+  images: Array<{ id: string; name: string; dataUrl: string }>,
+  prompts: Array<{ id: string; title: string; originalPrompt: string }>,
+  settings: ApiSettings,
+): Promise<ImagePromptMatchResult> {
+  if (!window.promptCabinetApi) {
+    throw new Error("AI image matching is available in the Electron desktop app only.");
+  }
+  return window.promptCabinetApi.matchImages({
+    images,
+    prompts,
+    settings: normalizeSettings(settings),
   });
 }
 

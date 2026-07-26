@@ -1,4 +1,4 @@
-import type { AnalyzeResult, ApiSettings, PromptCategory, PromptItem, QuickShortcutSettings, RewriteSegment } from "./types";
+import type { AnalyzeResult, ApiSettings, ImagePromptMatchResult, PromptCategory, PromptItem, QuickShortcutSettings, RewriteSegment } from "./types";
 import { analyzePrompt, isChinesePrompt } from "./promptEngine";
 
 const STORAGE_KEY = "prompt-cabinet-items";
@@ -21,6 +21,11 @@ declare global {
         settings: ApiSettings;
         outputLanguage?: "auto" | "zh" | "en";
       }) => Promise<AnalyzeResult>;
+      matchImages: (payload: {
+        images: Array<{ id: string; name: string; dataUrl: string }>;
+        prompts: Array<{ id: string; title: string; originalPrompt: string }>;
+        settings: ApiSettings;
+      }) => Promise<ImagePromptMatchResult>;
     };
     promptCabinetWindow?: {
       getAlwaysOnTop: () => Promise<boolean>;

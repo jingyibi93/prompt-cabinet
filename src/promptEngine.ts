@@ -115,6 +115,7 @@ export function analyzePrompt(
 }
 
 function inferCategory(source: string): PromptCategory {
+  if (hasGraphicDesignPromptIntent(source)) return "Design";
   if (hasImageGenerationIntent(source)) return "Image";
   if (containsAny(source, ["\u5c0f\u7ea2\u4e66", "xiaohongshu", "caption", "\u6587\u6848", "\u7206\u6b3e\u6587\u6848"])) {
     return "Writing";
@@ -510,6 +511,47 @@ function hasDesignUiIntent(source: string) {
     "\u54cd\u5e94\u5f0f",
   ]);
   return uiSignals >= 2;
+}
+
+function hasGraphicDesignPromptIntent(source: string) {
+  const formatSignals = countMatches(source, [
+    "poster",
+    "cover",
+    "magazine",
+    "publication",
+    "editorial",
+    "typography",
+    "typeset",
+    "layout",
+    "key visual",
+    "\u6d77\u62a5",
+    "\u5c01\u9762",
+    "\u6742\u5fd7",
+    "\u51fa\u7248",
+    "\u7f16\u8f91",
+    "\u6392\u7248",
+    "\u5b57\u4f53",
+    "\u4e3b\u89c6\u89c9",
+  ]);
+  const compositionSignals = countMatches(source, [
+    "composition",
+    "white space",
+    "blank space",
+    "margin",
+    "title",
+    "subtitle",
+    "text",
+    "publication-style",
+    "\u6784\u56fe",
+    "\u7559\u767d",
+    "\u8fb9\u8ddd",
+    "\u6807\u9898",
+    "\u5b57\u53f7",
+    "\u5b57\u91cd",
+    "\u884c\u8ddd",
+    "\u5b57\u8ddd",
+  ]);
+  return formatSignals >= 1 && compositionSignals >= 1;
 }
 
 function hasCodingImplementationIntent(source: string) {
