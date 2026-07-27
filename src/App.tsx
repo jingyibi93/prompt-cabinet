@@ -41,6 +41,7 @@ type BulkImportItem = {
   originalPrompt: string;
   category: PromptCategory;
   categoryEdited?: boolean;
+  categoryAiAnalyzed?: boolean;
   tags: string[];
   previewImage?: string;
   imageId: string;
@@ -143,7 +144,7 @@ function AppContent() {
   const [query, setQuery] = useState("");
   const [categoryFilter, setCategoryFilter] = useState<PromptCategory | "All">("All");
   const [dataCategory, setDataCategory] = useState<PromptCategory>("Design");
-  const [openDataMenu, setOpenDataMenu] = useState<"window" | "setting" | "data" | "help" | null>(null);
+  const [openDataMenu, setOpenDataMenu] = useState<"window" | "setting" | "data" | null>(null);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("analyze");
   const [apiSettings, setApiSettings] = useState<ApiSettings>(defaultApiSettings);
   const [quickShortcuts, setQuickShortcuts] = useState<QuickShortcutSettings>(defaultQuickShortcutSettings);
@@ -155,6 +156,7 @@ function AppContent() {
   const [categoryDraftColor, setCategoryDraftColor] = useState(categoryColorSwatches[0]);
   const [isBulkImportOpen, setIsBulkImportOpen] = useState(false);
   const [isExportWorkbenchOpen, setIsExportWorkbenchOpen] = useState(false);
+  const [isHelpGuideOpen, setIsHelpGuideOpen] = useState(false);
   const [bulkImportItems, setBulkImportItems] = useState<BulkImportItem[]>([]);
   const [bulkImportImages, setBulkImportImages] = useState<BulkImportImage[]>([]);
   const [bulkImportNotice, setBulkImportNotice] = useState("");
@@ -476,6 +478,7 @@ function AppContent() {
             title: shouldApplyAiTitle ? classification.title : item.title,
             titleAnalyzed: shouldApplyAiTitle || item.titleAnalyzed,
             category: classification.category,
+            categoryAiAnalyzed: true,
             tags: mergeUnique(classification.tags, item.tags),
           };
         }),
@@ -576,7 +579,7 @@ function AppContent() {
         category: item.category,
         createdAt: new Date().toISOString(),
         previewImage: imagesById.get(item.imageId) ?? item.previewImage,
-      }, item.categoryEdited ? item.category : undefined),
+      }, item.categoryEdited || item.categoryAiAnalyzed ? item.category : undefined),
     );
     const { prompts: mergedPrompts, added, updated } = mergeImportedPrompts(prompts, importedPrompts);
     setPrompts(mergedPrompts);
@@ -591,12 +594,12 @@ function AppContent() {
     const selected = savedPrompts.filter((prompt) => selectedIds.includes(prompt.id));
     const exportedPrompts = mode === "category"
       ? selected.filter((prompt) => prompt.category === dataCategory)
-      : selected;
+      : savedPrompts;
     if (!exportedPrompts.length) {
       window.alert(
         mode === "category"
           ? t("Select at least one prompt in the chosen category.", "请至少勾选一条所选分类中的 Prompt。")
-          : t("Select at least one prompt to export.", "请至少勾选一条 Prompt 导出。"),
+          : t("There are no saved prompts to export.", "目前没有可导出的已保存 Prompt。"),
       );
       return;
     }
@@ -741,23 +744,15 @@ function AppContent() {
               </div>
             )}
           </div>
-          <div className="data-menu">
-            <button
-              className={openDataMenu === "help" ? "active" : ""}
-              onClick={() => setOpenDataMenu((current) => (current === "help" ? null : "help"))}
-            >
-              {t("Help", "帮助")}
-            </button>
-            {openDataMenu === "help" && (
-              <div className="data-popover help-popover lift-card">
-                <strong>{t("Operation Guide", "操作指南")}</strong>
-                <p>{t("Use Quick Add Capture to save clipboard prompts into Inbox or a category.", "使用快速面板的收集模式，将剪贴板 Prompt 保存到临时收藏夹或分类。")}</p>
-                <p>{t("Use Quick Add Insert to place a saved prompt in the active text field.", "使用调用模式，将已保存的 Prompt 插入当前输入框。")}</p>
-                <p>{t("Organize Inbox items by editing their category, tags, and refined prompt.", "通过编辑分类、标签和 Prompt 来整理临时收藏夹。")}</p>
-                <p>{t("Import and export full libraries or one selected category from Setting.", "在设置中导入或导出完整资料库或单个分类。")}</p>
-              </div>
-            )}
-          </div>
+          <button
+            className={isHelpGuideOpen ? "active" : ""}
+            onClick={() => {
+              setOpenDataMenu(null);
+              setIsHelpGuideOpen(true);
+            }}
+          >
+            {t("Help", "帮助")}
+          </button>
         </nav>
         <input
           ref={bulkImportInputRef}
@@ -927,6 +922,21 @@ function AppContent() {
           onExport={exportWorkspacePrompts}
         />
       )}
+      {isHelpGuideOpen && (
+        <HelpGuide
+          onClose={() => setIsHelpGuideOpen(false)}
+          onOpenShortcutSettings={() => {
+            setSettingsSection("shortcuts");
+            setView("settings");
+            setIsHelpGuideOpen(false);
+          }}
+          onOpenAnalyzeSettings={() => {
+            setSettingsSection("analyze");
+            setView("settings");
+            setIsHelpGuideOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -1056,7 +1066,7 @@ function BulkImportWorkbench({
                           className="bulk-import-category-select"
                           value={item.category}
                           onChange={(event) => {
-                            onUpdateItem(item.id, { category: event.target.value, categoryEdited: true });
+                            onUpdateItem(item.id, { category: event.target.value, categoryEdited: true, categoryAiAnalyzed: false });
                             setEditingCategoryId("");
                           }}
                           onBlur={() => setEditingCategoryId("")}
@@ -1075,7 +1085,7 @@ function BulkImportWorkbench({
                           onClick={() => setEditingCategoryId(item.id)}
                           title={t("Click to adjust the inferred category", "点击调整自动推断的分类")}
                         >
-                          <span>{item.categoryEdited ? t("Edited", "已调整") : t("Auto", "自动")}</span>
+                          <span>{item.categoryEdited ? t("Edited", "已调整") : item.categoryAiAnalyzed ? "AI" : t("Auto", "自动")}</span>
                           {getCategoryLabel(item.category, t)}
                         </button>
                       )}
@@ -1225,7 +1235,7 @@ function ExportWorkbench({
 
         <footer className="bulk-import-footer export-workbench-footer">
           <span className="bulk-workspace-hint">
-            {t("Export all respects the checked prompts across every category.", "导出全部会导出所有已勾选 Prompt。")}
+            {t("Export all includes every saved prompt. Checked items only affect the selected-category export.", "导出全部会包含资料库中所有 Prompt；勾选仅影响导出选中分类。")}
           </span>
           <div className="form-actions">
             <label className="workspace-category-control">
@@ -1241,14 +1251,84 @@ function ExportWorkbench({
             <button className="pressable" onClick={() => onExport([...selectedIds], "category")} disabled={!selectedCategoryCount}>
               {t(`Export Selected Category (${selectedCategoryCount})`, `导出选中分类 (${selectedCategoryCount})`)}
             </button>
-            <button className="pressable" onClick={() => onExport([...selectedIds], "all")} disabled={!selectedCount}>
-              {t(`Export All (${selectedCount})`, `导出全部 (${selectedCount})`)}
+            <button className="pressable" onClick={() => onExport([...selectedIds], "all")} disabled={!prompts.length}>
+              {t(`Export All (${prompts.length})`, `导出全部 (${prompts.length})`)}
             </button>
             <button className="ghost-button" onClick={onClose}>
               {t("Cancel", "取消")}
             </button>
           </div>
         </footer>
+      </section>
+    </div>
+  );
+}
+
+function HelpGuide({
+  onClose,
+  onOpenShortcutSettings,
+  onOpenAnalyzeSettings,
+}: {
+  onClose: () => void;
+  onOpenShortcutSettings: () => void;
+  onOpenAnalyzeSettings: () => void;
+}) {
+  const { t } = useLanguage();
+  return (
+    <div className="modal-backdrop help-guide-backdrop" role="presentation" onMouseDown={onClose}>
+      <section
+        className="help-guide-panel lift-card"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="help-guide-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header className="help-guide-header">
+          <div>
+            <p className="eyebrow">{t("Prompt Cabinet guide", "Prompt Cabinet 操作指南")}</p>
+            <h2 id="help-guide-title">{t("Three ways to keep prompts close at hand.", "围绕三项主要功能使用 Prompt Cabinet。")}</h2>
+          </div>
+          <button className="bulk-import-close" onClick={onClose} aria-label={t("Close", "关闭")} title={t("Close", "关闭")}>
+            ×
+          </button>
+        </header>
+
+        <div className="help-guide-flow">
+          <article className="help-guide-step">
+            <span className="help-guide-index">01</span>
+            <h3>{t("Capture and Insert", "收集与调用")}</h3>
+            <p>{t("Copy a prompt anywhere and save it with Quick Add. When you need it again, switch the same panel to Insert and place the chosen prompt in the active text field.", "在任意应用复制 Prompt，用快速面板收集；需要使用时，在同一面板切换到调用模式，将选中的 Prompt 插入当前输入框。")}</p>
+            <div className="help-guide-keys" aria-label={t("Capture shortcuts", "收集快捷键")}>
+              <kbd>Cmd/Ctrl + Option/Alt + P</kbd>
+              <span>{t("Open Quick Add", "打开快速面板")}</span>
+              <kbd>Cmd/Ctrl + S</kbd>
+              <span>{t("Save", "保存")}</span>
+              <kbd>Cmd/Ctrl + Enter</kbd>
+              <span>{t("Insert", "插入")}</span>
+            </div>
+            <div className="help-guide-note">{t("The first Insert asks for macOS Accessibility permission. Allow Prompt Cabinet, then fully quit and reopen it once.", "首次调用需要在 macOS“辅助功能”中允许 Prompt Cabinet；开启后请完全退出并重新打开应用一次。")}</div>
+            <button className="ghost-button help-guide-action" onClick={onOpenShortcutSettings}>
+              {t("Open Shortcut Settings", "打开快捷键设置")}
+            </button>
+          </article>
+
+          <article className="help-guide-step">
+            <span className="help-guide-index">02</span>
+            <h3>{t("Rewrite and Reuse", "改写与复用")}</h3>
+            <p>{t("Open any saved prompt to compare the original and custom versions side by side. Save a rewrite for reuse, restore it to the original, or replace the original when the new version is ready.", "打开已保存的 Prompt，可左右对比原始与自定义版本。修改后可以保存、复原，或在确认后直接替换原始 Prompt。")}</p>
+            <div className="help-guide-note">{t("Copy always uses the current custom version. Input fields are highlighted in the original prompt and become #variables when inserted.", "复制始终使用当前自定义版本。原始 Prompt 中所需输入会高亮显示，调用时会变成对应的 #变量。")}</div>
+          </article>
+
+          <article className="help-guide-step">
+            <span className="help-guide-index">03</span>
+            <h3>{t("Import and Export", "导入与导出")}</h3>
+            <p>{t("Use Import Workspace to collect text, Markdown, Word, JSON, CSV, and images. Use Export Workspace to create a JSON backup with prompt details and linked images.", "在导入工作台收集文本、Markdown、Word、JSON、CSV 与图片；在导出工作台生成包含 Prompt 详情和关联图片的 JSON 备份。")}</p>
+            <div className="help-guide-note">{t("AI smart categorization and image matching are optional. They use your configured Local Codex or API connection.", "AI 智能分类和图片匹配按需使用，会调用你在分析设置中配置的本地 Codex 或 API。")}</div>
+            <button className="ghost-button help-guide-action" onClick={onOpenAnalyzeSettings}>
+              {t("Open Analyze Settings", "打开分析设置")}
+            </button>
+          </article>
+        </div>
       </section>
     </div>
   );
@@ -2859,7 +2939,7 @@ function getBulkMatchWords(value: string) {
 }
 
 function autoClassifyBulkImportItem(item: BulkImportItem): BulkImportItem {
-  if (item.categoryEdited) return item;
+  if (item.categoryEdited || item.categoryAiAnalyzed) return item;
   const analyzed = analyzePrompt(item.originalPrompt, "", { tags: item.tags });
   return {
     ...item,

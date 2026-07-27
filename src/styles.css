@@ -254,6 +254,112 @@ button:disabled {
   justify-content: flex-end;
 }
 
+.help-guide-backdrop {
+  align-items: center;
+}
+
+.help-guide-panel {
+  display: grid;
+  gap: 24px;
+  width: min(900px, calc(100vw - 44px));
+  max-height: min(760px, calc(100vh - 44px));
+  overflow: auto;
+  padding: 28px;
+  border-radius: 28px;
+}
+
+.help-guide-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 22px;
+}
+
+.help-guide-header h2 {
+  max-width: 620px;
+  margin: 4px 0 0;
+  color: #2a2e31;
+  font-size: 1.7rem;
+  line-height: 1.22;
+}
+
+.help-guide-flow {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-top: 1px solid rgba(121, 129, 136, 0.18);
+  border-left: 1px solid rgba(121, 129, 136, 0.18);
+}
+
+.help-guide-step {
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-height: 350px;
+  padding: 22px;
+  border-right: 1px solid rgba(121, 129, 136, 0.18);
+  border-bottom: 1px solid rgba(121, 129, 136, 0.18);
+}
+
+.help-guide-index {
+  color: #8b9399;
+  font-size: 0.74rem;
+  font-weight: 850;
+  letter-spacing: 0;
+}
+
+.help-guide-step h3 {
+  margin: 0;
+  color: #343a3e;
+  font-size: 1.1rem;
+}
+
+.help-guide-step p {
+  margin: 0;
+  color: #697177;
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+.help-guide-keys {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  margin-top: auto;
+  color: #6f777c;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.help-guide-keys kbd {
+  border: 1px solid rgba(122, 130, 136, 0.2);
+  border-radius: 6px;
+  padding: 5px 7px;
+  background: #eef1f3;
+  color: #3e464b;
+  font-family: inherit;
+  font-size: 0.74rem;
+  font-weight: 800;
+  box-shadow: inset 2px 2px 4px rgba(177, 184, 190, 0.38), inset -2px -2px 4px #ffffff;
+}
+
+.help-guide-action {
+  justify-self: start;
+  min-height: 36px;
+  margin-top: auto;
+  padding: 0 13px;
+  font-size: 0.8rem;
+}
+
+.help-guide-note {
+  padding: 10px 12px;
+  border-left: 3px solid #c5cf95;
+  background: #eef0d8;
+  color: #5e6659;
+  font-size: 0.79rem;
+  line-height: 1.45;
+}
+
 .bulk-import-backdrop {
   align-items: center;
 }
@@ -1629,15 +1735,15 @@ select {
 }
 
 .legend-dot.input {
-  background: #d8e84c;
+  background: #c5cf95;
 }
 
 .input-highlight {
   border-radius: 4px;
   padding: 1px 3px;
-  background: #e8f36a;
-  color: #353b30;
-  box-shadow: inset 0 -1px 0 rgba(137, 151, 30, 0.42);
+  background: #eef0d8;
+  color: #535b4e;
+  box-shadow: inset 0 -1px 0 rgba(133, 145, 94, 0.3);
 }
 
 .diff-text {
@@ -1971,6 +2077,14 @@ select {
 }
 
 @media (max-width: 720px) {
+  .help-guide-flow {
+    grid-template-columns: 1fr;
+  }
+
+  .help-guide-step {
+    min-height: 0;
+  }
+
   .app-shell {
     width: min(100% - 22px, 1180px);
     padding-top: 10px;
@@ -2061,6 +2175,27 @@ select {
 }
 
 @media (max-width: 560px) {
+  .help-guide-panel {
+    width: calc(100vw - 20px);
+    max-height: calc(100vh - 20px);
+    gap: 18px;
+    padding: 20px;
+    border-radius: 20px;
+  }
+
+  .help-guide-header h2 {
+    font-size: 1.35rem;
+  }
+
+  .help-guide-flow {
+    grid-template-columns: 1fr;
+  }
+
+  .help-guide-step {
+    min-height: 0;
+    padding: 18px;
+  }
+
   .bulk-import-workbench {
     width: calc(100vw - 20px);
     max-height: calc(100vh - 20px);
