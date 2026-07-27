@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import mammoth from "mammoth/mammoth.browser";
 import {
   analyzePromptWithApi,
   classifyPromptsWithApi,
@@ -8,7 +9,7 @@ import {
   saveApiSettings,
   testApiConnection,
 } from "./apiClient";
-import { analyzePrompt, categories as builtInCategories } from "./promptEngine";
+import { analyzePrompt, categories as builtInCategories, isChinesePrompt } from "./promptEngine";
 import { loadPrompts, normalizeImportedPrompts, savePrompts } from "./storage";
 import {
   LanguageProvider,
@@ -34,6 +35,9 @@ type BulkImportItem = {
   id: string;
   sourceName: string;
   title: string;
+  titleGenerated?: boolean;
+  titleEdited?: boolean;
+  titleAnalyzed?: boolean;
   originalPrompt: string;
   category: PromptCategory;
   categoryEdited?: boolean;
@@ -77,6 +81,10 @@ function isQuickAddMode() {
   return new URLSearchParams(window.location.search).get("quick") === "1";
 }
 
+function isQuickPreviewMode() {
+  return new URLSearchParams(window.location.search).get("quickPreview") === "1";
+}
+
 function loadCustomCategories(): CustomCategory[] {
   try {
     const parsed = JSON.parse(localStorage.getItem(CUSTOM_CATEGORIES_KEY) ?? "[]") as unknown;
@@ -116,6 +124,7 @@ function loadHiddenCategories(): PromptCategory[] {
 }
 
 export default function App() {
+  if (isQuickPreviewMode()) return <QuickImagePreviewApp />;
   return (
     <LanguageProvider>
       <AppContent />
@@ -153,6 +162,19 @@ function AppContent() {
   const [isAiMatchingBulkImages, setIsAiMatchingBulkImages] = useState(false);
   const [isAiClassifyingBulkItems, setIsAiClassifyingBulkItems] = useState(false);
   const bulkImportInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!openDataMenu) return;
+
+    const closeMenuWhenClickingElsewhere = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Element && target.closest(".data-menu")) return;
+      setOpenDataMenu(null);
+    };
+
+    document.addEventListener("pointerdown", closeMenuWhenClickingElsewhere);
+    return () => document.removeEventListener("pointerdown", closeMenuWhenClickingElsewhere);
+  }, [openDataMenu]);
 
   useEffect(() => {
     let isMounted = true;
@@ -397,7 +419,7 @@ function AppContent() {
         .join(" ");
       setBulkImportNotice(message || t("No prompt content was found in these files.", "这些文件中没有识别到 Prompt 内容。"));
     } catch {
-      setBulkImportNotice(t("Some files could not be read. Try text, Markdown, JSON, CSV, or image files.", "部分文件无法读取。请尝试文本、Markdown、JSON、CSV 或图片文件。"));
+      setBulkImportNotice(t("Some files could not be read. Try text, Markdown, Word, JSON, CSV, or image files.", "部分文件无法读取。请尝试文本、Markdown、Word、JSON、CSV 或图片文件。"));
     } finally {
       setIsReadingBulkFiles(false);
       if (bulkImportInputRef.current) bulkImportInputRef.current.value = "";
@@ -406,17 +428,6 @@ function AppContent() {
 
   function updateBulkImportItem(id: string, patch: Partial<BulkImportItem>) {
     setBulkImportItems((current) => current.map((item) => (item.id === id ? { ...item, ...patch } : item)));
-  }
-
-  function autoMatchBulkImportImages() {
-    const matchedItems = autoAssignBulkImages(bulkImportItems, bulkImportImages);
-    const newMatches = matchedItems.filter((item, index) => !bulkImportItems[index]?.imageId && item.imageId).length;
-    setBulkImportItems(matchedItems);
-    setBulkImportNotice(
-      newMatches
-        ? t(`Matched ${newMatches} images by title or file name.`, `已按标题或文件名匹配 ${newMatches} 张图片。`)
-        : t("No additional confident image matches were found.", "没有发现可可靠自动匹配的其他图片。"),
-    );
   }
 
   async function aiClassifyBulkImportItems() {
@@ -459,8 +470,11 @@ function AppContent() {
         current.map((item) => {
           const classification = classificationsById.get(item.id);
           if (!classification || item.categoryEdited) return item;
+          const shouldApplyAiTitle = Boolean(classification.title) && !item.titleEdited;
           return {
             ...item,
+            title: shouldApplyAiTitle ? classification.title : item.title,
+            titleAnalyzed: shouldApplyAiTitle || item.titleAnalyzed,
             category: classification.category,
             tags: mergeUnique(classification.tags, item.tags),
           };
@@ -549,7 +563,8 @@ function AppContent() {
       autoClassifyImportedPrompt({
         id: item.id,
         status: "saved",
-        title: item.title.trim() || "Untitled Prompt",
+        // File names and first lines are only preview labels. Generate a useful library title on import.
+        title: item.titleGenerated && !item.titleEdited && !item.titleAnalyzed ? "Untitled Prompt" : item.title.trim() || "Untitled Prompt",
         originalPrompt: item.originalPrompt.trim(),
         refinedPrompt: item.originalPrompt.trim(),
         useCase: "",
@@ -748,7 +763,7 @@ function AppContent() {
           ref={bulkImportInputRef}
           className="hidden-file-input"
           type="file"
-          accept=".txt,.md,.markdown,.json,.csv,text/plain,text/markdown,application/json,text/csv,image/*"
+          accept=".txt,.md,.markdown,.docx,.json,.csv,text/plain,text/markdown,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/json,text/csv,image/*"
           multiple
           onChange={(event) => void addBulkImportFiles(event.target.files)}
         />
@@ -894,7 +909,6 @@ function AppContent() {
           onClose={closeBulkImportWorkbench}
           onPickFiles={() => bulkImportInputRef.current?.click()}
           onUpdateItem={updateBulkImportItem}
-          onAutoMatchImages={autoMatchBulkImportImages}
           onAiClassify={() => void aiClassifyBulkImportItems()}
           onAiMatchImages={() => void aiMatchBulkImportImages()}
           canAiEnhanceImports={apiSettings.enabled && apiSettings.provider !== "mock"}
@@ -926,7 +940,6 @@ function BulkImportWorkbench({
   onClose,
   onPickFiles,
   onUpdateItem,
-  onAutoMatchImages,
   onAiClassify,
   onAiMatchImages,
   canAiEnhanceImports,
@@ -942,7 +955,6 @@ function BulkImportWorkbench({
   onClose: () => void;
   onPickFiles: () => void;
   onUpdateItem: (id: string, patch: Partial<BulkImportItem>) => void;
-  onAutoMatchImages: () => void;
   onAiClassify: () => void;
   onAiMatchImages: () => void;
   canAiEnhanceImports: boolean;
@@ -978,11 +990,6 @@ function BulkImportWorkbench({
           <button className="pressable" onClick={onPickFiles} disabled={isReading}>
             {isReading ? t("Reading files...", "正在读取文件...") : t("Choose Files", "选择文件")}
           </button>
-          {items.length > 0 && images.length > 0 && (
-            <button className="ghost-button bulk-import-auto-match" onClick={onAutoMatchImages}>
-              {t("Auto-match Images", "自动匹配图片")}
-            </button>
-          )}
           {items.length > 0 && (
             <button
               className="ghost-button bulk-import-ai-classify"
@@ -1011,7 +1018,7 @@ function BulkImportWorkbench({
               {isAiMatchingImages ? t("AI matching...", "AI 匹配中...") : t("AI Match Unlinked Images", "AI 匹配未关联图片")}
             </button>
           )}
-          <span>{t("Text, Markdown, JSON, CSV, and images", "文本、Markdown、JSON、CSV 与图片")}</span>
+          <span>{t("Text, Markdown, Word, JSON, CSV, and images", "文本、Markdown、Word、JSON、CSV 与图片")}</span>
           <span>{t(`${selectedCount} selected`, `已选择 ${selectedCount} 条`)}</span>
         </div>
 
@@ -1020,7 +1027,7 @@ function BulkImportWorkbench({
         {!items.length ? (
           <div className="bulk-import-empty">
             <strong>{t("Start with a folder of prompt files", "从一组 Prompt 文件开始")}</strong>
-            <span>{t("Files with matching names are linked automatically, for example campaign.md and campaign.png.", "同名文件会自动关联，例如 campaign.md 与 campaign.png。")}</span>
+            <span>{t("Text, Markdown, Word, JSON, CSV, and matching images are supported. Files with matching names are linked automatically, for example campaign.docx and campaign.png.", "支持文本、Markdown、Word、JSON、CSV 与同名图片。文件名相同会自动关联，例如 campaign.docx 与 campaign.png。")}</span>
           </div>
         ) : (
           <div className="bulk-import-list" aria-label={t("Prompt candidates", "候选 Prompt")}>
@@ -1040,7 +1047,7 @@ function BulkImportWorkbench({
                     <div className="bulk-import-fields">
                       <input
                         value={item.title}
-                        onChange={(event) => onUpdateItem(item.id, { title: event.target.value })}
+                        onChange={(event) => onUpdateItem(item.id, { title: event.target.value, titleEdited: true })}
                         aria-label={t("Prompt title", "Prompt 标题")}
                         placeholder={t("Prompt title", "Prompt 标题")}
                       />
@@ -1393,7 +1400,7 @@ function QuickAddApp() {
 
   async function insertSelectedPrompt() {
     if (!selectedPrompt || isInserting) return;
-    const text = getQuickPromptText(selectedPrompt);
+    const text = preparePromptForQuickInsert(getQuickPromptText(selectedPrompt), selectedPrompt.inputNeeded);
     if (!text.trim()) return;
     setIsInserting(true);
     setInsertFeedback(null);
@@ -1517,6 +1524,12 @@ function QuickAddApp() {
     shortcutSettings,
   ]);
 
+  const selectedPromptPreview = quickMode === "insert" ? selectedPrompt?.previewImage ?? "" : "";
+
+  useEffect(() => {
+    void window.promptCabinetWindow?.setQuickAddImagePreview(selectedPromptPreview);
+  }, [selectedPromptPreview]);
+
   return (
     <div className="quick-shell">
       <section className="quick-panel lift-card">
@@ -1638,6 +1651,24 @@ function getQuickBrowseCategories(prompts: PromptItem[]) {
   return browseCategories.length ? browseCategories : [QUICK_BROWSE_INBOX];
 }
 
+function QuickImagePreviewApp() {
+  const [image, setImage] = useState("");
+
+  useEffect(() => {
+    let isMounted = true;
+    void window.promptCabinetWindow?.getQuickAddImagePreview().then((nextImage) => {
+      if (isMounted) setImage(nextImage);
+    });
+    const removeListener = window.promptCabinetWindow?.onQuickAddImagePreview(setImage);
+    return () => {
+      isMounted = false;
+      removeListener?.();
+    };
+  }, []);
+
+  return <div className="quick-image-preview-shell">{image && <img src={image} alt="" />}</div>;
+}
+
 function getQuickBrowsePrompts(prompts: PromptItem[], category: string) {
   if (category === QUICK_BROWSE_INBOX) return prompts.filter((prompt) => prompt.status === "inbox");
   return prompts.filter((prompt) => prompt.status !== "inbox" && prompt.category === category);
@@ -1645,6 +1676,106 @@ function getQuickBrowsePrompts(prompts: PromptItem[], category: string) {
 
 function getQuickPromptText(prompt: PromptItem) {
   return prompt.status === "inbox" ? prompt.originalPrompt : prompt.refinedPrompt || prompt.originalPrompt;
+}
+
+function preparePromptForQuickInsert(prompt: string, inputNeeded: string[]) {
+  const variables = getPromptInputVariables(prompt, inputNeeded);
+  return variables.reduce((prepared, variable) => {
+    if (hasPromptPlaceholder(prepared, variable)) return prepared;
+    const marker = `#${variable.toLowerCase()}`;
+    return getPromptInputPatterns(variable).reduce((next, pattern) => next.replace(pattern, marker), prepared);
+  }, prompt);
+}
+
+function getPromptInputVariables(prompt: string, storedInputs: string[]) {
+  const variables: string[] = [];
+  const add = (value: string) => {
+    const normalized = normalizePromptVariable(value);
+    if (normalized === "object" && variables.includes("any thematic object")) return;
+    if (normalized === "any thematic object") {
+      const genericObjectIndex = variables.findIndex((variable) => variable === "object");
+      if (genericObjectIndex >= 0) variables.splice(genericObjectIndex, 1);
+    }
+    if (normalized && !variables.some((variable) => variable.toLowerCase() === normalized.toLowerCase())) variables.push(normalized);
+  };
+
+  const placeholderPattern = /#(uploaded image|reference image|original image|source text|source document|design brief)|#([A-Za-z][A-Za-z0-9_/-]{0,39})|\{\{\s*([^{}\n]{1,40}?)\s*\}\}|<\s*([^<>\n]{1,40}?)\s*>|\[\[?\s*([A-Za-z][A-Za-z0-9 _/-]{0,39})\s*\]?\]/gi;
+  for (const match of prompt.matchAll(placeholderPattern)) add(match[1] ?? match[2] ?? match[3] ?? match[4] ?? match[5] ?? "");
+  if (/\bany\s+thematic\s+object\b/i.test(prompt)) {
+    add("any thematic object");
+  } else if (/(?:任意|任何|一个)?(?:主题|主要|视觉)?对象/i.test(prompt)) {
+    add(isChinesePrompt(prompt) ? "对象" : "object");
+  }
+  if (/upload(?:ed)?\s+(?:an?\s+)?(?:image|photo|picture)|provided\s+(?:an?\s+)?(?:image|photo|picture)|input image|上传(?:的)?(?:图片|图像|照片)|提供(?:的)?(?:图片|图像|照片)/i.test(prompt)) {
+    add(isChinesePrompt(prompt) ? "上传的图片" : "uploaded image");
+  }
+  if (/original image|source image|依据(?:原图|原始图)|基于(?:原图|原始图)|以(?:原图|原始图)为|原图(?:转换|重绘|改造)|原始图(?:转换|重绘|改造)/i.test(prompt)) {
+    add(isChinesePrompt(prompt) ? "原图" : "original image");
+  }
+  if (/reference (?:image|photo|picture)|参考(?:图片|图像|照片)/i.test(prompt)) {
+    add(isChinesePrompt(prompt) ? "参考图片" : "reference image");
+  }
+  if (/design brief|设计需求/i.test(prompt)) add(isChinesePrompt(prompt) ? "设计需求" : "design brief");
+  storedInputs.forEach((input) => {
+    const normalized = normalizePromptVariable(input);
+    if (normalized && prompt.toLowerCase().includes(normalized.toLowerCase())) add(normalized);
+  });
+  return variables;
+}
+
+function normalizePromptVariable(value: string) {
+  const normalized = value
+    .replace(/^\s*(?:#|\{\{|\[\[?|<)/, "")
+    .replace(/(?:\}\}|\]\]?|>)\s*$/, "")
+    .trim();
+  if (!normalized) return "";
+  if (/^any thematic object$/i.test(normalized)) return "any thematic object";
+  if (/^object$|主题对象|对象/i.test(normalized)) return /[\u3400-\u9fff]/.test(normalized) ? "对象" : "object";
+  return normalized.length <= 40 ? normalized : "";
+}
+
+function hasPromptPlaceholder(prompt: string, variable: string) {
+  const escaped = escapeRegExp(variable);
+  return new RegExp(`(?:#${escaped}\\b|\\{\\{\\s*${escaped}\\s*\\}\\}|<\\s*${escaped}\\s*>|\\[\\[?\\s*${escaped}\\s*\\]?\\])`, "i").test(prompt);
+}
+
+function getPromptInputDisplayLabel(prompt: string, variable: string) {
+  const escaped = escapeRegExp(variable);
+  const pattern = new RegExp(`(#${escaped}\\b|\\{\\{\\s*${escaped}\\s*\\}\\}|<\\s*${escaped}\\s*>|\\[\\[?\\s*${escaped}\\s*\\]?\\])`, "i");
+  return prompt.match(pattern)?.[0] ?? variable;
+}
+
+function getPromptInputPatterns(variable: string) {
+  const normalized = variable.toLowerCase();
+  if (normalized === "any thematic object") {
+    return [/\bany\s+thematic\s+object\b/gi];
+  }
+  if (normalized === "object" || variable === "对象") {
+    return [/\b(?:any\s+)?(?:thematic\s+)?(?:main\s+)?(?:visual\s+)?object\b/gi, /(?:任意|任何|一个)?(?:主题|主要|视觉)?对象/g];
+  }
+  if (normalized === "uploaded image" || variable === "上传的图片") {
+    return [/\b(?:upload(?:ed)?|provided|input)\s+(?:an?\s+)?(?:image|photo|picture)\b/gi, /(?:上传|提供)(?:的)?(?:图片|图像|照片)/g];
+  }
+  if (normalized === "original image" || variable === "原图") {
+    return [/\b(?:original|source)\s+image\b/gi, /原图|原始图/g];
+  }
+  if (normalized === "reference image" || variable === "参考图片") {
+    return [/\breference\s+(?:image|photo|picture)\b/gi, /参考(?:图片|图像|照片)/g];
+  }
+  if (normalized === "source text" || variable === "源文本") {
+    return [/\b(?:source|original|draft)\s+text\b/gi, /(?:原始|源|待处理)(?:文本|文案)/g];
+  }
+  if (normalized === "source document" || variable === "源文档") {
+    return [/\b(?:source|uploaded|provided)\s+(?:document|file|pdf)\b/gi, /(?:源|上传的|提供的)(?:文档|文件)/g];
+  }
+  if (normalized === "design brief" || variable === "设计需求") {
+    return [/\bdesign\s+brief\b/gi, /设计需求/g];
+  }
+  return [];
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function getQuickPromptPreview(prompt: PromptItem) {
@@ -2739,8 +2870,12 @@ function autoClassifyBulkImportItem(item: BulkImportItem): BulkImportItem {
 
 async function readBulkImportFile(file: File): Promise<BulkImportItem[]> {
   if (!isBulkImportTextFile(file)) return [];
-  const text = await file.text();
   const extension = getFileExtension(file.name);
+  if (extension === "docx") {
+    const result = await mammoth.extractRawText({ arrayBuffer: await file.arrayBuffer() });
+    return parseBulkText(result.value, file.name);
+  }
+  const text = await file.text();
   if (extension === "json") return parseBulkJson(text, file.name);
   if (extension === "csv") return parseBulkCsv(text, file.name);
   return parseBulkText(text, file.name);
@@ -2773,10 +2908,17 @@ function parseBulkCsv(text: string, sourceName: string) {
 }
 
 function parseBulkText(text: string, sourceName: string) {
-  return text
-    .split(/\n\s*(?:-{3,}|_{3,}|\*{3,})\s*\n/g)
+  return splitBulkTextBlocks(text)
     .map((block, index) => createBulkTextItem(block, sourceName, index))
     .filter(Boolean) as BulkImportItem[];
+}
+
+function splitBulkTextBlocks(text: string) {
+  const normalized = text.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n").trim();
+  if (!normalized) return [];
+
+  // Support divider lines and the generous blank-line spacing common in copied prompt collections.
+  return normalized.split(/\n\s*(?:-{3,}|_{3,}|\*{3,})\s*\n|\n{3,}/g);
 }
 
 function promptToBulkImportItem(prompt: PromptItem, sourceName: string): BulkImportItem {
@@ -2800,7 +2942,8 @@ function genericValueToBulkItem(value: unknown, sourceName: string, index: numbe
     .find((item): item is string => typeof item === "string" && item.trim().length > 0)
     ?.trim();
   if (!originalPrompt) return undefined;
-  const title = typeof value.title === "string" && value.title.trim() ? value.title.trim() : getBulkTitle(originalPrompt, sourceName, index);
+  const suppliedTitle = typeof value.title === "string" && value.title.trim() ? value.title.trim() : "";
+  const title = suppliedTitle || getBulkTitle(originalPrompt, sourceName, index);
   const tags = Array.isArray(value.tags)
     ? value.tags.map(String).map((tag) => tag.trim()).filter(Boolean)
     : typeof value.tags === "string"
@@ -2810,6 +2953,7 @@ function genericValueToBulkItem(value: unknown, sourceName: string, index: numbe
     id: crypto.randomUUID(),
     sourceName,
     title,
+    titleGenerated: !suppliedTitle,
     originalPrompt,
     category: typeof value.category === "string" && value.category.trim() ? value.category.trim() : "Product",
     tags,
@@ -2825,10 +2969,12 @@ function createBulkTextItem(block: string, sourceName: string, index: number) {
   const heading = trimmed.match(/^#\s+(.+)\n+([\s\S]*)$/);
   const originalPrompt = (heading?.[2] || trimmed).trim();
   if (!originalPrompt) return undefined;
+  const headingTitle = heading?.[1].trim() || "";
   return {
     id: crypto.randomUUID(),
     sourceName,
-    title: heading?.[1].trim() || getBulkTitle(originalPrompt, sourceName, index),
+    title: headingTitle || getBulkTitle(originalPrompt, sourceName, index),
+    titleGenerated: !headingTitle,
     originalPrompt,
     category: "Product",
     tags: [],
@@ -2876,7 +3022,7 @@ function parseCsv(text: string) {
 }
 
 function isBulkImportTextFile(file: File) {
-  return ["txt", "md", "markdown", "json", "csv"].includes(getFileExtension(file.name));
+  return ["txt", "md", "markdown", "docx", "json", "csv"].includes(getFileExtension(file.name));
 }
 
 function isImageFile(file: File) {
@@ -3073,6 +3219,8 @@ function PromptDetail({
   const [saved, setSaved] = useState(false);
   const savedCustomPrompt = prompt.refinedPrompt || prompt.originalPrompt;
   const savedRewriteSegments = getPromptRewriteSegments(prompt);
+  const inputVariables = getPromptInputVariables(prompt.originalPrompt, prompt.inputNeeded);
+  const displayedInputs = inputVariables.map((variable) => getPromptInputDisplayLabel(prompt.originalPrompt, variable));
   const hasUnsavedChanges =
     customPrompt !== savedCustomPrompt || !areRewriteSegmentsEqual(rewriteSegments, savedRewriteSegments);
 
@@ -3099,6 +3247,28 @@ function PromptDetail({
   function restoreOriginalPrompt() {
     setCustomPrompt(prompt.originalPrompt);
     setRewriteSegments(prompt.originalPrompt ? [{ value: prompt.originalPrompt, status: "same" }] : []);
+    setSaved(false);
+  }
+
+  function replaceOriginalPrompt() {
+    const replacement = customPrompt.trim();
+    if (!replacement || replacement === prompt.originalPrompt) return;
+    const confirmed = window.confirm(
+      t(
+        "Replace the original prompt with this custom version? The current rewrite comparison will be cleared.",
+        "用当前自定义版本替换原始 Prompt 吗？现有的改写对比将被清除。",
+      ),
+    );
+    if (!confirmed) return;
+
+    onSave({
+      ...prompt,
+      originalPrompt: replacement,
+      refinedPrompt: replacement,
+      rewriteHistory: undefined,
+    });
+    setCustomPrompt(replacement);
+    setRewriteSegments([{ value: replacement, status: "same" }]);
     setSaved(false);
   }
 
@@ -3129,17 +3299,24 @@ function PromptDetail({
 
       <section className="prompt-info-panel lift-card">
         <InfoItem label={t("Use Case", "使用场景")} value={prompt.useCase} />
-        <InfoItem label={t("Input Needed", "所需输入")} value={prompt.inputNeeded.join(", ")} />
+        <InfoItem label={t("Input Needed", "所需输入")} value={displayedInputs.join(", ") || t("None", "无")} />
         <InfoItem label={t("Platform", "平台")} value={prompt.platform} />
         <InfoItem label={t("Expected Output", "预期输出")} value={prompt.expectedOutput} />
       </section>
 
       <div className="detail-grid">
-        <LiveRewritePreview segments={rewriteSegments} />
+        <LiveRewritePreview segments={rewriteSegments} inputVariables={inputVariables} />
         <section className="detail-section lift-card featured custom-prompt-section">
           <div className="custom-prompt-heading">
             <h2>{t("Custom Prompt", "自定义 Prompt")}</h2>
             <div className="custom-prompt-actions">
+              <button
+                className="ghost-button replace-original-button"
+                disabled={!customPrompt.trim() || customPrompt === prompt.originalPrompt}
+                onClick={replaceOriginalPrompt}
+              >
+                {t("Replace Original", "替换原始 Prompt")}
+              </button>
               <button className="ghost-button" disabled={!hasUnsavedChanges} onClick={saveCustomPrompt}>
                 {saved ? t("Saved", "已保存") : t("Save", "保存")}
               </button>
@@ -3347,8 +3524,11 @@ function normalizeDiffToken(value: string) {
   return value;
 }
 
-function getPromptRewriteSegments(prompt: PromptItem) {
+function getPromptRewriteSegments(prompt: PromptItem): RewriteSegment[] {
   const refinedPrompt = prompt.refinedPrompt || prompt.originalPrompt;
+  if (refinedPrompt === prompt.originalPrompt) {
+    return prompt.originalPrompt ? [{ value: prompt.originalPrompt, status: "same" }] : [];
+  }
   if (isValidRewriteHistory(prompt.rewriteHistory, prompt.originalPrompt, refinedPrompt)) {
     return prompt.rewriteHistory;
   }
@@ -3377,7 +3557,10 @@ function applyTrackedRewrite(
   previousPrompt: string,
   nextPrompt: string,
   originalPrompt: string,
-) {
+): RewriteSegment[] {
+  if (nextPrompt === originalPrompt) {
+    return originalPrompt ? [{ value: originalPrompt, status: "same" }] : [];
+  }
   const validHistory = isValidRewriteHistory(history, originalPrompt, previousPrompt)
     ? history
     : buildSnapshotRewriteSegments(originalPrompt, previousPrompt);
@@ -3475,7 +3658,7 @@ function PromptReferenceImage({ image, title }: { image: string; title: string }
   );
 }
 
-function LiveRewritePreview({ segments }: { segments: RewriteSegment[] }) {
+function LiveRewritePreview({ segments, inputVariables }: { segments: RewriteSegment[]; inputVariables: string[] }) {
   const { t } = useLanguage();
   return (
     <section className="detail-section lift-card live-rewrite-section">
@@ -3484,23 +3667,59 @@ function LiveRewritePreview({ segments }: { segments: RewriteSegment[] }) {
         <div className="rewrite-legend" aria-label="Rewrite color legend">
           <span><i className="legend-dot added" />{t("Added", "新增")}</span>
           <span><i className="legend-dot removed" />{t("Removed", "删除")}</span>
+          {inputVariables.length > 0 && <span><i className="legend-dot input" />{t("Input", "所需输入")}</span>}
         </div>
       </div>
-      <DiffText segments={segments} label="Original prompt with live custom changes" />
+      <DiffText segments={segments} label="Original prompt with live custom changes" inputVariables={inputVariables} />
     </section>
   );
 }
 
-function DiffText({ segments, label }: { segments: RewriteSegment[]; label: string }) {
+function DiffText({ segments, label, inputVariables = [] }: { segments: RewriteSegment[]; label: string; inputVariables?: string[] }) {
   return (
     <div className="diff-text live-rewrite-text" aria-label={label}>
       {segments.map((segment, index) => (
         <span className={segment.status === "same" ? undefined : `diff-token ${segment.status}`} key={`${label}-${index}`}>
-          {segment.value}
+          <PromptInputHighlights value={segment.value} inputVariables={inputVariables} keyPrefix={`${label}-${index}`} />
         </span>
       ))}
     </div>
   );
+}
+
+function PromptInputHighlights({ value, inputVariables, keyPrefix }: { value: string; inputVariables: string[]; keyPrefix: string }) {
+  const matches = getPromptInputMatches(value, inputVariables);
+  if (!matches.length) return <>{value}</>;
+
+  const parts: ReactNode[] = [];
+  let cursor = 0;
+  matches.forEach((match, index) => {
+    if (cursor < match.start) parts.push(value.slice(cursor, match.start));
+    parts.push(<mark className="input-highlight" key={`${keyPrefix}-input-${index}`}>{value.slice(match.start, match.end)}</mark>);
+    cursor = match.end;
+  });
+  if (cursor < value.length) parts.push(value.slice(cursor));
+  return <>{parts}</>;
+}
+
+function getPromptInputMatches(value: string, inputVariables: string[]) {
+  const ranges: Array<{ start: number; end: number }> = [];
+  const addMatches = (pattern: RegExp) => {
+    for (const match of value.matchAll(pattern)) {
+      if (typeof match.index === "number" && match[0]) ranges.push({ start: match.index, end: match.index + match[0].length });
+    }
+  };
+
+  addMatches(/#(?:uploaded image|reference image|original image|source text|source document|design brief)|#[A-Za-z][A-Za-z0-9_/-]{0,39}|\{\{\s*[^{}\n]{1,40}?\s*\}\}|<\s*[^<>\n]{1,40}?\s*>|\[\[?\s*[A-Za-z][A-Za-z0-9 _/-]{0,39}\s*\]?\]/gi);
+  inputVariables.forEach((variable) => getPromptInputPatterns(variable).forEach(addMatches));
+
+  return ranges
+    .sort((left, right) => left.start - right.start || right.end - left.end)
+    .reduce<Array<{ start: number; end: number }>>((merged, range) => {
+      const previous = merged.at(-1);
+      if (!previous || range.start >= previous.end) merged.push(range);
+      return merged;
+    }, []);
 }
 
 function TagList({ tags }: { tags: string[] }) {

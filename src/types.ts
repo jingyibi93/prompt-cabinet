@@ -68,6 +68,7 @@ export type ImagePromptMatchResult = {
 
 export type PromptClassification = {
   id: string;
+  title: string;
   category: PromptCategory;
   tags: string[];
 };

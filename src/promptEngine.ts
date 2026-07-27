@@ -172,6 +172,12 @@ function inferAction(source: string, useChinese: boolean) {
 function buildTitle(text: string, notes: string, category: PromptCategory, useChinese: boolean) {
   const source = `${text}\n${notes}`.toLowerCase();
 
+  if (containsAny(source, ["crevice", "dark crevice", "narrow slit", "bright slit", "occluder", "裂缝", "狭缝", "遮挡物"])) {
+    return useChinese ? "裂缝光箱广告视觉" : "Crevice Lightbox Ad Visual";
+  }
+  if (containsAny(source, ["cinematic", "电影感"]) && containsAny(source, ["3d", "three-dimensional", "三维"]) && containsAny(source, ["advertisement", "commercial", "广告"])) {
+    return useChinese ? "电影感3D品牌广告" : "Cinematic 3D Brand Ad";
+  }
   if (containsAny(source, ["\u5c0f\u7ea2\u4e66", "xiaohongshu"])) return useChinese ? "\u5c0f\u7ea2\u4e66\u6587\u6848" : "Xiaohongshu Copy";
   if (containsAny(source, ["caption", "\u6587\u6848", "\u7206\u6b3e"])) return useChinese ? "\u793e\u5a92\u6587\u6848" : "Social Media Copy";
   if (category === "Image" || hasImageGenerationIntent(source)) {
@@ -222,6 +228,13 @@ function buildTitle(text: string, notes: string, category: PromptCategory, useCh
 }
 
 function buildSpecificImageTitle(source: string, useChinese: boolean) {
+  if (containsAny(source, ["crevice", "dark crevice", "narrow slit", "bright slit", "occluder", "裂缝", "狭缝", "遮挡物"])) {
+    return useChinese ? "裂缝光箱广告视觉" : "Crevice Lightbox Ad Visual";
+  }
+  if (containsAny(source, ["cinematic", "电影感"]) && containsAny(source, ["3d", "three-dimensional", "三维"]) && containsAny(source, ["advertisement", "commercial", "广告"])) {
+    return useChinese ? "电影感3D品牌广告" : "Cinematic 3D Brand Ad";
+  }
+
   const styles: Array<[string, string]> = [];
   const addStyle = (english: string, chinese: string) => {
     if (!styles.some(([value]) => value === english)) styles.push([english, chinese]);
@@ -360,7 +373,8 @@ function buildInputNeeded(rawPrompt: string, category: PromptCategory, useChines
     if (!inputs.includes(value)) inputs.push(value);
   };
 
-  if (/upload(?:ed)? (?:image|photo|picture)|provided (?:image|photo|picture)|input image|上传(?:的)?(?:图片|图像|照片)|提供(?:的)?(?:图片|图像|照片)/i.test(source)) add("Uploaded image", "上传的图片");
+  if (/upload(?:ed)?\s+(?:an?\s+)?(?:image|photo|picture)|provided\s+(?:an?\s+)?(?:image|photo|picture)|input image|上传(?:的)?(?:图片|图像|照片)|提供(?:的)?(?:图片|图像|照片)/i.test(source)) add("Uploaded image", "上传的图片");
+  if (/original image|source image|依据(?:原图|原始图)|基于(?:原图|原始图)|以(?:原图|原始图)为|原图(?:转换|重绘|改造)|原始图(?:转换|重绘|改造)/i.test(source)) add("Original image", "原图");
   if (/reference (?:image|photo|picture)|参考(?:图片|图像|照片)|基于.{0,8}(?:图片|图像|照片)/i.test(source)) add("Reference image", "参考图片");
   if (/screenshots?|screen captures?|截图|屏幕截图/i.test(source)) add("Screenshot", "截图");
   if (/source text|original text|draft text|text to (?:rewrite|edit|translate|summarize)|provided (?:copy|content|text)|原始(?:文本|文案)|待(?:改写|编辑|翻译|总结)文本|提供(?:的)?(?:文案|内容|文本)/i.test(source)) {
@@ -374,28 +388,23 @@ function buildInputNeeded(rawPrompt: string, category: PromptCategory, useChines
   if (/repository|codebase|repo context|项目仓库|代码仓库|代码库/i.test(source)) add("Repository or codebase", "代码仓库或代码库");
   if (/brand guidelines?|brand assets?|style guide|logo files?|品牌指南|品牌素材|视觉规范|标志文件/i.test(source)) add("Brand assets or guidelines", "品牌素材或规范");
   if (/product (?:details|information|specifications)|产品(?:详情|信息|规格)/i.test(source)) add("Product details", "产品信息");
+  if (/design brief|设计需求/i.test(source)) add("Design brief", "设计需求");
 
-  const placeholderPattern = /\{\{\s*([^{}\n]{1,40}?)\s*\}\}|<\s*([^<>\n]{1,40}?)\s*>|\[\s*([A-Z][A-Z0-9 _-]{1,39})\s*\]/g;
+  if (/\bany\s+thematic\s+object\b/i.test(rawPrompt)) {
+    add("any thematic object", "任意主题对象");
+  } else if (/(?:任意|任何|一个)?(?:主题|主要|视觉)?对象/i.test(rawPrompt)) {
+    add("object", "对象");
+  }
+
+  const placeholderPattern = /#(uploaded image|reference image|original image|source text|source document|design brief)|#([A-Za-z][A-Za-z0-9_/-]{0,39})|\{\{\s*([^{}\n]{1,40}?)\s*\}\}|<\s*([^<>\n]{1,40}?)\s*>|\[\[?\s*([A-Za-z][A-Za-z0-9 _/-]{0,39})\s*\]?\]/gi;
   for (const match of rawPrompt.matchAll(placeholderPattern)) {
-    const placeholder = (match[1] ?? match[2] ?? match[3] ?? "").trim();
+    const placeholder = (match[1] ?? match[2] ?? match[3] ?? match[4] ?? match[5] ?? "").trim();
     if (placeholder && !inputs.some((item) => item.toLowerCase() === placeholder.toLowerCase())) {
       inputs.push(placeholder);
     }
   }
 
-  if (inputs.length) return inputs.slice(0, 8);
-
-  const fallback: Record<PromptCategory, [string, string][]> = {
-    Design: [["Design brief", "设计需求"]],
-    Writing: [["Source topic or draft", "主题或原始草稿"]],
-    Research: [["Research question and sources", "研究问题与资料来源"]],
-    Coding: [["Repository context and task", "项目背景与开发任务"]],
-    Image: [["Subject or reference material", "主体或参考素材"]],
-    Video: [["Video concept or source material", "视频概念或源素材"]],
-    Career: [["Target role and experience", "目标岗位与个人经历"]],
-    Product: [["User problem or product idea", "用户问题或产品构想"]],
-  };
-  return fallback[category].map(([english, chinese]) => (useChinese ? chinese : english));
+  return inputs.slice(0, 8);
 }
 
 function buildExpectedOutput(category: PromptCategory, useChinese: boolean) {

@@ -38,6 +38,9 @@ declare global {
       loadShortcuts: () => Promise<QuickShortcutSettings>;
       saveShortcuts: (shortcuts: QuickShortcutSettings) => Promise<QuickShortcutSettings>;
       setQuickAddMode: (mode: "capture" | "insert") => Promise<"capture" | "insert">;
+      setQuickAddImagePreview: (image: string) => Promise<boolean>;
+      getQuickAddImagePreview: () => Promise<string>;
+      onQuickAddImagePreview: (callback: (image: string) => void) => () => void;
       readClipboardText: () => Promise<string>;
       readClipboardImage: () => Promise<string>;
       insertText: (text: string, language?: "zh" | "en") => Promise<{ ok: boolean; copied: boolean; needsAccessibility: boolean }>;

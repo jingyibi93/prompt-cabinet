@@ -26,6 +26,13 @@ contextBridge.exposeInMainWorld("promptCabinetWindow", {
   loadShortcuts: () => ipcRenderer.invoke("prompt-cabinet:load-shortcuts"),
   saveShortcuts: (shortcuts) => ipcRenderer.invoke("prompt-cabinet:save-shortcuts", shortcuts),
   setQuickAddMode: (mode) => ipcRenderer.invoke("prompt-cabinet:set-quick-add-mode", mode),
+  setQuickAddImagePreview: (image) => ipcRenderer.invoke("prompt-cabinet:set-quick-add-image-preview", image),
+  getQuickAddImagePreview: () => ipcRenderer.invoke("prompt-cabinet:get-quick-add-image-preview"),
+  onQuickAddImagePreview: (callback) => {
+    const listener = (_event, image) => callback(image);
+    ipcRenderer.on("prompt-cabinet:quick-add-image-preview", listener);
+    return () => ipcRenderer.removeListener("prompt-cabinet:quick-add-image-preview", listener);
+  },
   readClipboardText: () => ipcRenderer.invoke("prompt-cabinet:read-clipboard-text"),
   readClipboardImage: () => ipcRenderer.invoke("prompt-cabinet:read-clipboard-image"),
   insertText: (text, language) => ipcRenderer.invoke("prompt-cabinet:insert-text", text, language),

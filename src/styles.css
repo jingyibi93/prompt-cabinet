@@ -21,7 +21,10 @@ body {
 
 html:has(.quick-shell),
 body:has(.quick-shell),
-#root:has(.quick-shell) {
+#root:has(.quick-shell),
+html:has(.quick-image-preview-shell),
+body:has(.quick-image-preview-shell),
+#root:has(.quick-image-preview-shell) {
   background: transparent;
 }
 
@@ -1625,6 +1628,18 @@ select {
   background: #d99b95;
 }
 
+.legend-dot.input {
+  background: #d8e84c;
+}
+
+.input-highlight {
+  border-radius: 4px;
+  padding: 1px 3px;
+  background: #e8f36a;
+  color: #353b30;
+  box-shadow: inset 0 -1px 0 rgba(137, 151, 30, 0.42);
+}
+
 .diff-text {
   max-height: 420px;
   overflow: auto;
@@ -1684,6 +1699,10 @@ select {
   min-width: 72px;
 }
 
+.custom-prompt-actions .replace-original-button {
+  min-width: 136px;
+}
+
 .custom-prompt-editor {
   flex: 1;
   min-height: 520px;
@@ -1732,6 +1751,7 @@ select {
 .quick-actions.insert {
   grid-template-columns: auto auto minmax(0, 1fr) repeat(2, auto);
 }
+
 
 .quick-mode-switch {
   display: grid;
@@ -1838,6 +1858,24 @@ select {
 
 .quick-prompt-select:disabled {
   color: #8a9298;
+}
+
+
+.quick-image-preview-shell {
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  border: 1px solid rgba(139, 148, 155, 0.28);
+  border-radius: 10px;
+  background: rgba(236, 239, 241, 0.96);
+  box-shadow: 6px 7px 16px rgba(77, 84, 90, 0.26), -3px -3px 10px rgba(255, 255, 255, 0.72);
+}
+
+.quick-image-preview-shell img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .quick-actions .pressable {

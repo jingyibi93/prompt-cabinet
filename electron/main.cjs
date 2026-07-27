@@ -28,11 +28,16 @@ let mainWindowNormalBounds;
 let mainWindowPinInterval;
 let mainWindowPinEnabled = false;
 let quickAddWindow;
+let quickPreviewWindow;
+let quickPreviewImage = "";
 let mainWindowHiddenForQuickAdd = false;
 let quickAddFloatInterval;
 let quickShortcutSettings = { ...defaultQuickShortcutSettings };
 let registeredOpenQuickAddShortcut = "";
 let quickAddMode = "capture";
+const quickAddCompactHeight = 58;
+const quickPreviewWidth = 190;
+const quickPreviewHeight = 102;
 
 if (!hasSingleInstanceLock) app.quit();
 app.on("second-instance", () => {
@@ -104,9 +109,10 @@ function buildPromptClassificationOutputSchema(categories) {
         items: {
           type: "object",
           additionalProperties: false,
-          required: ["id", "category", "tags"],
+          required: ["id", "title", "category", "tags"],
           properties: {
             id: { type: "string" },
+            title: { type: "string" },
             category: { type: "string", enum: categories },
             tags: { type: "array", items: { type: "string" } },
           },
@@ -566,11 +572,13 @@ async function classifyPromptsWithApi(_event, payload) {
   if (!prompts.length) return { classifications: [] };
 
   const instruction = [
-    "Classify each candidate prompt into exactly one of the provided categories.",
+    "First, name each prompt with a short, specific, searchable title. Then classify it into exactly one of the provided categories.",
+    "The title is the most important field: state the main subject or deliverable plus its distinctive style, audience, format, or use case. Never use a category, platform, or generic action as the title.",
+    "For example, title a dark crevice advertising visual 'Crevice Lightbox Ad Visual', not 'Image Generation'.",
     "Classify by the prompt's intended reusable outcome, not by isolated keywords or the language it is written in.",
     "Use Image for image-generation instructions and Video for video-generation instructions. Use Design for UI/UX, visual layout, graphic design direction, or design critique.",
     "Return concise useful tags in the prompt's dominant language. Do not duplicate a tag or merely repeat the category name.",
-    "Return JSON only in this shape: {\"classifications\":[{\"id\":\"...\",\"category\":\"...\",\"tags\":[\"...\"]}]}",
+    "Return JSON only in this shape: {\"classifications\":[{\"id\":\"...\",\"title\":\"...\",\"category\":\"...\",\"tags\":[\"...\"]}]}",
     `Available categories: ${availableCategories.join(", ")}`,
     "",
     ...prompts.map((prompt) => `PROMPT ${prompt.id}\nTitle: ${String(prompt.title || "Untitled").slice(0, 160)}\nText: ${prompt.originalPrompt.slice(0, 1400)}`),
@@ -591,6 +599,7 @@ async function classifyPromptsWithApi(_event, payload) {
 
 function normalizePromptClassifications(result, prompts, categories) {
   const promptIds = new Set(prompts.map((prompt) => prompt.id));
+  const promptsById = new Map(prompts.map((prompt) => [prompt.id, prompt]));
   const validCategoryNames = new Set(categories);
   const seen = new Set();
   const classifications = Array.isArray(result?.classifications) ? result.classifications : [];
@@ -598,14 +607,17 @@ function normalizePromptClassifications(result, prompts, categories) {
     classifications: classifications
       .map((classification) => ({
         id: typeof classification?.id === "string" ? classification.id : "",
+        title: typeof classification?.title === "string" ? classification.title.trim() : "",
         category: typeof classification?.category === "string" ? classification.category.trim() : "",
         tags: Array.isArray(classification?.tags) ? classification.tags.map(String) : [],
       }))
       .filter((classification) => promptIds.has(classification.id) && validCategoryNames.has(classification.category) && !seen.has(classification.id))
       .map((classification) => {
         seen.add(classification.id);
+        const prompt = promptsById.get(classification.id);
         return {
           ...classification,
+          title: normalizeAnalysisTitle(classification.title, prompt?.originalPrompt, classification.category),
           tags: normalizeTags(classification.tags, classification.category),
         };
       }),
@@ -620,6 +632,7 @@ function buildAnalyzeSystemPrompt(outputLanguage = "auto") {
       : "Use the same dominant language as the Raw Prompt for title, tags, useCase, inputNeeded, and expectedOutput. If the Raw Prompt is Chinese, return these fields in Simplified Chinese. Keep category enum values and platform brand names unchanged.";
   const schemaPrompt = [
     "Analyze this saved work prompt and return JSON only.",
+    "Title is the first priority. Write a concise, specific, searchable label that lets a person find this exact prompt later.",
     "Classify the prompt by its domain and intended reuse case, not by the fact that it may ask for runnable code.",
     "Use exactly one category from: Design, Writing, Research, Coding, Image, Video, Career, Product.",
     "Category definitions:",
@@ -643,6 +656,8 @@ function buildAnalyzeSystemPrompt(outputLanguage = "auto") {
     "For prompts with a placeholder subject, name the reusable visual or workflow style. Example: a cartoon character prompt with rough black outlines should be titled 'Rough-Outline Cartoon Character', not 'Image Generation'.",
     "Keep title short, clear, and scannable, usually 3-7 English words or 4-12 Chinese characters.",
     "For inputNeeded, inspect the Raw Prompt for the actual variable material or information a user must supply before running it.",
+    "Return only what the Raw Prompt actually requires, using the exact replaceable phrase from the Raw Prompt whenever it is clear. For example, return 'any thematic object' for that exact phrase, 'original image' when the prompt says to transform or preserve an original/source image, 'uploaded image' only when an image must be supplied, and 'design brief' only when the prompt explicitly depends on a design brief. Return an empty array when no user-supplied variable is required.",
+    "Preserve explicit placeholders such as #object, {{object}}, [object], or <object> as the concise variable name without the surrounding markers.",
     "Prioritize explicit dependencies such as an uploaded or reference image, source text, document, URL, dataset, repository, product details, or named placeholders.",
     "For example, if the Raw Prompt says it works from an uploaded image, inputNeeded should contain only a concise item such as 'Uploaded image' unless another user-supplied input is explicitly required.",
     "Do not return a generic category checklist. Do not include fixed style directions, instructions, goals, audience, context, or constraints unless the Raw Prompt clearly leaves them for the user to provide.",
@@ -791,19 +806,97 @@ function normalizeAnalyzeResult(result, rawPrompt, outputLanguage = "auto") {
   const category = normalizeCategory(result?.category, rawPrompt);
   const useChinese = outputLanguage === "zh" || (outputLanguage !== "en" && isChinesePromptText(rawPrompt));
   return {
-    title: typeof result?.title === "string" && result.title.trim() ? result.title.trim() : useChinese ? "未命名提示词" : "Untitled Prompt",
+    title: normalizeAnalysisTitle(result?.title, rawPrompt, category, outputLanguage),
     category,
     tags: normalizeTags(Array.isArray(result?.tags) ? result.tags.map(String) : [category], category),
     platform: normalizePlatform(result?.platform, category),
     useCase: typeof result?.useCase === "string" && result.useCase.trim()
       ? result.useCase.trim()
       : useChinese ? "保存并复用这条提示词。" : "Saved prompt for future reuse.",
-    inputNeeded: Array.isArray(result?.inputNeeded) ? result.inputNeeded.map(String).filter(Boolean).slice(0, 10) : [],
+    inputNeeded: normalizeInputNeeded(result?.inputNeeded, rawPrompt, category, outputLanguage),
     expectedOutput: typeof result?.expectedOutput === "string" && result.expectedOutput.trim()
       ? result.expectedOutput.trim()
       : useChinese ? "可复用的提示词成果。" : "Reusable prompt output.",
     refinedPrompt: rawPrompt,
   };
+}
+
+function normalizeInputNeeded(value, rawPrompt, category, outputLanguage = "auto") {
+  const inferred = inferPromptInputs(rawPrompt, outputLanguage);
+  if (inferred.length) return inferred;
+
+  const useChinese = outputLanguage === "zh" || (outputLanguage !== "en" && isChinesePromptText(rawPrompt));
+  const supplied = Array.isArray(value) ? value.map(String).map((input) => input.trim()).filter(Boolean) : [];
+  const genericInputs = useChinese
+    ? new Set(["设计需求", "主题或原始草稿", "用户问题或产品构想"])
+    : new Set(["design brief", "source topic or draft", "user problem or product idea"]);
+  const source = String(rawPrompt || "").toLowerCase();
+  return supplied
+    .filter((input) => !genericInputs.has(input.toLowerCase()) || source.includes(input.toLowerCase()))
+    .slice(0, 10);
+}
+
+function inferPromptInputs(rawPrompt, outputLanguage = "auto") {
+  const text = String(rawPrompt || "");
+  const useChinese = outputLanguage === "zh" || (outputLanguage !== "en" && isChinesePromptText(text));
+  const inputs = [];
+  const add = (value) => {
+    if (value && !inputs.some((input) => input.toLowerCase() === value.toLowerCase())) inputs.push(value);
+  };
+  const placeholderPattern = /#(uploaded image|reference image|original image|source text|source document|design brief)|#([A-Za-z][A-Za-z0-9_/-]{0,39})|\{\{\s*([^{}\n]{1,40}?)\s*\}\}|<\s*([^<>\n]{1,40}?)\s*>|\[\[?\s*([A-Za-z][A-Za-z0-9 _/-]{0,39})\s*\]?\]/gi;
+  for (const match of text.matchAll(placeholderPattern)) add((match[1] ?? match[2] ?? match[3] ?? match[4] ?? match[5] ?? "").trim());
+  if (/\bany\s+thematic\s+object\b/i.test(text)) {
+    add("any thematic object");
+  } else if (/(?:任意|任何|一个)?(?:主题|主要|视觉)?对象/i.test(text)) {
+    add(useChinese ? "对象" : "object");
+  }
+  if (/upload(?:ed)?\s+(?:an?\s+)?(?:image|photo|picture)|provided\s+(?:an?\s+)?(?:image|photo|picture)|input image|上传(?:的)?(?:图片|图像|照片)|提供(?:的)?(?:图片|图像|照片)/i.test(text)) {
+    add(useChinese ? "上传的图片" : "uploaded image");
+  }
+  if (/original image|source image|依据(?:原图|原始图)|基于(?:原图|原始图)|以(?:原图|原始图)为|原图(?:转换|重绘|改造)|原始图(?:转换|重绘|改造)/i.test(text)) {
+    add(useChinese ? "原图" : "original image");
+  }
+  if (/reference (?:image|photo|picture)|参考(?:图片|图像|照片)/i.test(text)) add(useChinese ? "参考图片" : "reference image");
+  if (/design brief|设计需求/i.test(text)) add(useChinese ? "设计需求" : "design brief");
+  return inputs.slice(0, 10);
+}
+
+function normalizeAnalysisTitle(value, rawPrompt, category, outputLanguage = "auto") {
+  const title = typeof value === "string" ? value.trim().replace(/\s+/g, " ") : "";
+  if (title && !isGenericAnalysisTitle(title)) return title.slice(0, 96);
+  const useChinese = outputLanguage === "zh" || (outputLanguage !== "en" && isChinesePromptText(rawPrompt));
+  return buildSpecificFallbackTitle(rawPrompt, category, useChinese);
+}
+
+function isGenericAnalysisTitle(value) {
+  const normalized = value.toLowerCase().replace(/[\s._-]+/g, " ").trim();
+  return [
+    "image generation", "image prompt", "writing prompt", "writing refinement", "code development",
+    "research analysis", "product planning", "video creation", "design workflow", "career materials",
+    "图像生成", "图像提示词", "写作优化", "代码开发", "研究分析", "产品规划", "视频创作", "设计工作流", "求职材料",
+  ].includes(normalized);
+}
+
+function buildSpecificFallbackTitle(rawPrompt, category, useChinese) {
+  const source = String(rawPrompt || "").toLowerCase();
+  if (containsAny(source, ["crevice", "dark crevice", "narrow slit", "bright slit", "occluder", "裂缝", "狭缝", "遮挡物"])) {
+    return useChinese ? "裂缝光箱广告视觉" : "Crevice Lightbox Ad Visual";
+  }
+  if (containsAny(source, ["cinematic", "电影感"]) && containsAny(source, ["3d", "three-dimensional", "三维"]) && containsAny(source, ["advertisement", "commercial", "广告"])) {
+    return useChinese ? "电影感3D品牌广告" : "Cinematic 3D Brand Ad";
+  }
+  if (containsAny(source, ["xiaohongshu", "小红书"])) return useChinese ? "小红书内容文案" : "Xiaohongshu Content Copy";
+  if (containsAny(source, ["neumorphism", "soft ui", "新拟态"])) return useChinese ? "新拟态界面设计" : "Neumorphic UI Design";
+  if (containsAny(source, ["debug", "bug", "调试", "报错"])) return useChinese ? "代码问题排查" : "Code Issue Diagnosis";
+  if (containsAny(source, ["resume", "interview", "简历", "面试"])) return useChinese ? "求职材料优化" : "Career Material Refinement";
+  const fallback = useChinese ? {
+    Design: "自定义设计工作流", Writing: "自定义写作工作流", Research: "自定义研究工作流", Coding: "自定义开发工作流",
+    Image: "自定义图像视觉", Video: "自定义视频创作", Career: "自定义求职工作流", Product: "自定义产品工作流",
+  } : {
+    Design: "Custom Design Workflow", Writing: "Custom Writing Workflow", Research: "Custom Research Workflow", Coding: "Custom Development Workflow",
+    Image: "Custom Visual Prompt", Video: "Custom Video Workflow", Career: "Custom Career Workflow", Product: "Custom Product Workflow",
+  };
+  return fallback[category] || (useChinese ? "自定义提示词" : "Custom Prompt");
 }
 
 function isChinesePromptText(value) {
@@ -998,9 +1091,9 @@ async function createQuickAddWindow() {
   }
   quickAddWindow = new BrowserWindow({
     width: 780,
-    height: 58,
+    height: quickAddCompactHeight,
     minWidth: 680,
-    minHeight: 58,
+    minHeight: quickAddCompactHeight,
     resizable: false,
     frame: false,
     hasShadow: false,
@@ -1046,6 +1139,7 @@ async function createQuickAddWindow() {
     query: { quick: "1" },
   });
   quickAddWindow.on("closed", () => {
+    closeQuickAddPreviewWindow();
     stopQuickAddFloatGuard();
     unregisterQuickAddShortcuts();
     quickAddWindow = undefined;
@@ -1149,6 +1243,70 @@ function positionQuickAddWindow(window) {
   const [windowWidth, windowHeight] = window.getSize();
   window.setPosition(Math.round(x + (width - windowWidth) / 2), y + 18);
   window.setSize(windowWidth, windowHeight);
+  positionQuickAddPreviewWindow();
+}
+
+function positionQuickAddPreviewWindow() {
+  if (!quickPreviewWindow || quickPreviewWindow.isDestroyed() || !quickAddWindow || quickAddWindow.isDestroyed()) return;
+  const { x, y } = quickAddWindow.getBounds();
+  quickPreviewWindow.setPosition(x + 282, y + quickAddCompactHeight + 6);
+}
+
+function closeQuickAddPreviewWindow() {
+  quickPreviewImage = "";
+  if (!quickPreviewWindow || quickPreviewWindow.isDestroyed()) return;
+  quickPreviewWindow.close();
+  quickPreviewWindow = undefined;
+}
+
+function showQuickAddImagePreview(image) {
+  quickPreviewImage = typeof image === "string" && image.startsWith("data:image/") ? image : "";
+  if (!quickPreviewImage || !quickAddWindow || quickAddWindow.isDestroyed()) {
+    closeQuickAddPreviewWindow();
+    return false;
+  }
+
+  if (quickPreviewWindow && !quickPreviewWindow.isDestroyed()) {
+    quickPreviewWindow.webContents.send("prompt-cabinet:quick-add-image-preview", quickPreviewImage);
+    positionQuickAddPreviewWindow();
+    quickPreviewWindow.showInactive();
+    return true;
+  }
+
+  quickPreviewWindow = new BrowserWindow({
+    width: quickPreviewWidth,
+    height: quickPreviewHeight,
+    resizable: false,
+    frame: false,
+    transparent: true,
+    backgroundColor: "#00000000",
+    alwaysOnTop: true,
+    focusable: false,
+    skipTaskbar: true,
+    show: false,
+    parent: quickAddWindow,
+    ...(process.platform === "darwin" ? { type: "panel" } : {}),
+    webPreferences: {
+      preload: path.join(__dirname, "preload.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
+  });
+  quickPreviewWindow.setIgnoreMouseEvents(true, { forward: true });
+  quickPreviewWindow.on("closed", () => {
+    quickPreviewWindow = undefined;
+  });
+  quickPreviewWindow.once("ready-to-show", () => {
+    if (!quickPreviewWindow || quickPreviewWindow.isDestroyed()) return;
+    positionQuickAddPreviewWindow();
+    keepQuickAddFloating(quickPreviewWindow);
+    quickPreviewWindow.showInactive();
+  });
+  quickPreviewWindow.loadFile(path.join(__dirname, "..", "dist", "index.html"), {
+    query: { quickPreview: "1" },
+  });
+  return true;
 }
 
 function hideMainWindowForQuickAdd() {
@@ -1357,6 +1515,12 @@ app.whenReady().then(async () => {
     if (quickAddWindow && !quickAddWindow.isDestroyed()) registerQuickAddShortcuts();
     return quickAddMode;
   });
+  ipcMain.handle("prompt-cabinet:set-quick-add-image-preview", (event, image) => {
+    const window = BrowserWindow.fromWebContents(event.sender);
+    if (!window || window.isDestroyed() || window !== quickAddWindow) return false;
+    return showQuickAddImagePreview(image);
+  });
+  ipcMain.handle("prompt-cabinet:get-quick-add-image-preview", () => quickPreviewImage);
   ipcMain.handle("prompt-cabinet:save-shortcuts", async (_event, shortcuts) => {
     const nextShortcuts = normalizeQuickShortcutSettings(shortcuts);
     if (new Set(Object.values(nextShortcuts)).size !== Object.keys(nextShortcuts).length) {
