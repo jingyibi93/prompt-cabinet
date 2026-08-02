@@ -32,6 +32,16 @@ export type ApiSettings = {
   model: string;
 };
 
+export type AppUpdateInfo = {
+  status: "update-available" | "up-to-date" | "unavailable";
+  currentVersion: string;
+  latestVersion?: string;
+  releaseName?: string;
+  releaseUrl?: string;
+  publishedAt?: string;
+  message?: string;
+};
+
 export type QuickShortcutSettings = {
   openQuickAdd: string;
   runAction: string;
@@ -71,6 +81,7 @@ export type PromptClassification = {
   title: string;
   category: PromptCategory;
   tags: string[];
+  inputNeeded: string[];
 };
 
 export type PromptClassificationResult = {

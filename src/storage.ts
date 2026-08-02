@@ -1,5 +1,5 @@
-import type { AnalyzeResult, ApiSettings, ImagePromptMatchResult, PromptCategory, PromptClassificationResult, PromptItem, QuickShortcutSettings, RewriteSegment } from "./types";
-import { analyzePrompt, isChinesePrompt } from "./promptEngine";
+import type { AnalyzeResult, ApiSettings, AppUpdateInfo, ImagePromptMatchResult, PromptCategory, PromptClassificationResult, PromptItem, QuickShortcutSettings, RewriteSegment } from "./types";
+import { analyzePrompt, cleanPromptTags, isChinesePrompt } from "./promptEngine";
 
 const STORAGE_KEY = "prompt-cabinet-items";
 
@@ -37,6 +37,8 @@ declare global {
       setAlwaysOnTop: (enabled: boolean) => Promise<boolean>;
       loadShortcuts: () => Promise<QuickShortcutSettings>;
       saveShortcuts: (shortcuts: QuickShortcutSettings) => Promise<QuickShortcutSettings>;
+      checkForUpdates: () => Promise<AppUpdateInfo>;
+      openUpdateDownload: (releaseUrl: string) => Promise<boolean>;
       setQuickAddMode: (mode: "capture" | "insert") => Promise<"capture" | "insert">;
       setQuickAddImagePreview: (image: string) => Promise<boolean>;
       getQuickAddImagePreview: () => Promise<string>;
@@ -81,6 +83,12 @@ export function normalizeImportedPrompts(input: unknown): PromptItem[] {
 }
 
 function normalizePrompt(prompt: PromptItem): PromptItem {
+  // Backfill input metadata for older imports that only stored the prompt text.
+  const recoveredInputNeeded = Array.isArray(prompt.inputNeeded) && prompt.inputNeeded.length
+    ? prompt.inputNeeded
+    : analyzePrompt(prompt.originalPrompt || "", prompt.notes || "", { category: prompt.category }).inputNeeded;
+  const normalizedCategory = normalizeCategory(prompt.category);
+  const normalizedPlatform = prompt.platform || "ChatGPT";
   const normalized: PromptItem = {
     ...prompt,
     id: prompt.id || crypto.randomUUID(),
@@ -89,9 +97,9 @@ function normalizePrompt(prompt: PromptItem): PromptItem {
     originalPrompt: prompt.originalPrompt || "",
     refinedPrompt: prompt.refinedPrompt || prompt.originalPrompt || "",
     useCase: prompt.useCase || "Saved prompt for future reuse.",
-    inputNeeded: Array.isArray(prompt.inputNeeded) ? prompt.inputNeeded : [],
+    inputNeeded: recoveredInputNeeded,
     expectedOutput: prompt.expectedOutput || "Reusable prompt output.",
-    platform: prompt.platform || "ChatGPT",
+    platform: normalizedPlatform,
     notes: prompt.notes || "No source note added yet.",
     createdAt: prompt.createdAt || new Date().toISOString(),
     updatedAt: typeof prompt.updatedAt === "string" && prompt.updatedAt.trim() ? prompt.updatedAt : undefined,
@@ -100,9 +108,9 @@ function normalizePrompt(prompt: PromptItem): PromptItem {
         ? prompt.previewImage
         : undefined,
     rewriteHistory: normalizeRewriteHistory(prompt.rewriteHistory, prompt.originalPrompt || "", prompt.refinedPrompt || prompt.originalPrompt || ""),
-    category: normalizeCategory(prompt.category),
+    category: normalizedCategory,
     tags: Array.isArray(prompt.tags)
-      ? normalizeTags(prompt.tags.map((tag) => (tag === "Portfolio" ? "Design" : tag === "Codex" ? "Coding" : tag)))
+      ? normalizeTags(cleanPromptTags(prompt.tags.map((tag) => (tag === "Portfolio" ? "Design" : tag === "Codex" ? "Coding" : tag)), normalizedCategory, normalizedPlatform, prompt.originalPrompt))
       : [],
   };
   return localizeLegacyMockAnalysis(normalized);

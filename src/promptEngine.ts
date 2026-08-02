@@ -95,7 +95,7 @@ export function analyzePrompt(
   const category = overrides.category ?? inferCategory(source);
   const platform = inferPlatform(source, category);
   const action = inferAction(source, useChinese);
-  const tags = mergeTags(buildTags(source, category, platform, useChinese), overrides.tags ?? []);
+  const tags = cleanPromptTags(mergeTags(buildTags(source, category, platform, useChinese), overrides.tags ?? []), category, platform, text);
   const title = buildTitle(text, notes, category, useChinese);
 
   return {
@@ -292,35 +292,29 @@ function buildTags(source: string, category: PromptCategory, platform: string, u
   };
 
   const uiSignals = countMatches(source, ["ui", "ux", "interface", "\u754c\u9762", "\u9875\u9762", "\u6309\u94ae", "\u5361\u7247", "\u5bfc\u822a"]);
-  const visualStyleSignals = countMatches(source, ["neumorphism", "soft ui", "\u65b0\u62df\u6001", "\u9634\u5f71", "\u5706\u89d2", "\u4f4e\u5bf9\u6bd4", "\u6d45\u7070", "\u67d4\u548c"]);
   const interactionSignals = countMatches(source, ["hover", "active", "\u6309\u538b", "\u4e0a\u6d6e", "\u4ea4\u4e92", "\u72b6\u6001"]);
 
   if (category === "Writing") {
     if (containsAny(source, ["\u5c0f\u7ea2\u4e66", "xiaohongshu"])) add("Xiaohongshu");
-    add("Copywriting");
+    if (containsAny(source, ["copywriting", "\u6587\u6848"])) add("Copywriting");
     if (containsAny(source, ["caption", "\u6587\u6848", "\u6807\u9898"])) add("Caption");
     if (containsAny(source, ["hashtag", "\u6807\u7b7e"])) add("Hashtags");
     if (containsAny(source, ["\u8bc4\u8bba", "\u4e92\u52a8"])) add("Engagement");
     if (containsAny(source, ["\u7206\u6b3e", "\u6536\u85cf", "\u8f6c\u53d1"])) add("Growth");
   } else if (category === "Design") {
-    if (uiSignals > 0 || visualStyleSignals > 1) add("UI Design");
-    if (visualStyleSignals > 0) add("Neumorphism");
-    if (containsAny(source, ["soft ui", "\u67d4\u548c", "\u4f4e\u5bf9\u6bd4", "\u6d45\u7070"])) add("Soft UI");
+    if (uiSignals > 0) add("UI Design");
+    if (containsAny(source, ["neumorphism", "\u65b0\u62df\u6001"])) add("Neumorphism");
+    if (containsAny(source, ["soft ui"])) add("Soft UI");
     if (interactionSignals > 0) add("Interaction");
     if (containsAny(source, ["\u4f5c\u54c1\u96c6", "portfolio"])) add("Portfolio");
   } else if (category === "Image") {
-    add("Image Prompt");
     if (containsAny(source, ["pixel-art", "pixel art", "pixel", "sprite"])) add("Pixel Art");
     if (containsAny(source, ["food", "snack", "\u98df\u7269", "\u7f8e\u98df"])) add("Food Illustration");
     if (containsAny(source, ["game asset", "game ui asset", "inventory icon", "sprite"])) add("Game Asset");
     if (containsAny(source, ["icon", "sticker", "emoji"])) add("Icon");
-    if (containsAny(source, ["midjourney"])) add("Midjourney");
   } else if (category === "Video") {
-    add("Video Prompt");
-    if (containsAny(source, ["runway"])) add("Runway");
     if (containsAny(source, ["storyboard", "\u5206\u955c"])) add("Storyboard");
   } else if (category === "Coding") {
-    add("Development");
     if (containsAny(source, ["debug", "bug"])) add("Debug");
     if (containsAny(source, ["react", "typescript"])) add("Frontend");
   }
@@ -332,10 +326,56 @@ function buildTags(source: string, category: PromptCategory, platform: string, u
   if (containsAny(source, ["research", "\u8c03\u7814"])) add("Research");
   if (containsAny(source, ["critique", "review", "\u8bc4\u5ba1"])) add("Review");
 
-  add(category);
-  add(platform);
   const localizedTags = useChinese ? tags.map((tag) => chineseTagMap[tag] ?? tag) : tags;
   return localizedTags.slice(0, 8);
+}
+
+const genericTagAliases: Record<string, string[]> = {
+  Design: ["design", "设计", "ui design", "界面设计", "ux design", "用户体验"],
+  Writing: ["writing", "写作", "writing prompt", "写作提示词"],
+  Research: ["research", "研究", "调研", "research prompt", "研究提示词"],
+  Coding: ["coding", "code", "代码", "编程", "development", "开发"],
+  Image: ["image", "图片", "图像", "image prompt", "图像提示词", "生图"],
+  Video: ["video", "视频", "video prompt", "视频提示词"],
+  Career: ["career", "职业", "求职"],
+  Product: ["product", "产品", "product prompt", "产品提示词"],
+};
+
+const genericPlatformTags = new Set([
+  "chatgpt", "codex", "midjourney", "runway", "claude", "figma", "dalle", "sora",
+]);
+
+export function cleanPromptTags(tags: string[], category?: PromptCategory, platform?: string, rawPrompt = "") {
+  const forbidden = new Set([
+    "prompt",
+    "提示词",
+    "prompting",
+    "ai",
+    ...(category ? genericTagAliases[category] ?? [category] : []),
+    ...(platform ? [platform] : []),
+  ].map((tag) => normalizeTagKey(tag)));
+  const seen = new Set<string>();
+  const cleaned: string[] = [];
+  tags.forEach((tag) => {
+    const value = String(tag).trim().replace(/\s+/g, " ");
+    const key = normalizeTagKey(value);
+    if (!key || seen.has(key) || forbidden.has(key) || genericPlatformTags.has(key) || lacksTagEvidence(key, rawPrompt)) return;
+    seen.add(key);
+    cleaned.push(value);
+  });
+  return cleaned.slice(0, 6);
+}
+
+function lacksTagEvidence(key: string, rawPrompt: string) {
+  if (!rawPrompt.trim()) return false;
+  const source = rawPrompt.toLowerCase();
+  if (["neumorphism", "\u65b0\u62df\u6001"].includes(key)) return !containsAny(source, ["neumorphism", "\u65b0\u62df\u6001"]);
+  if (["softui", "\u67d4\u548c\u754c\u9762"].includes(key)) return !containsAny(source, ["soft ui", "neumorphism", "\u65b0\u62df\u6001"]);
+  return false;
+}
+
+function normalizeTagKey(value: string) {
+  return value.trim().toLowerCase().replace(/[\s._-]+/g, "");
 }
 
 function buildUseCase(category: PromptCategory, action: string, useChinese: boolean) {
@@ -373,7 +413,13 @@ function buildInputNeeded(rawPrompt: string, category: PromptCategory, useChines
     if (!inputs.includes(value)) inputs.push(value);
   };
 
-  if (/upload(?:ed)?\s+(?:an?\s+)?(?:image|photo|picture)|provided\s+(?:an?\s+)?(?:image|photo|picture)|input image|上传(?:的)?(?:图片|图像|照片)|提供(?:的)?(?:图片|图像|照片)/i.test(source)) add("Uploaded image", "上传的图片");
+  // Preserve the user's concrete image-input phrase so the detail highlight and quick insert label match it.
+  const chineseImageInput = rawPrompt.match(/((?:上传|提供)(?:的)?[^，。；;.!?\n]{0,80}(?:图|图片|图像|照片))/i)?.[1]?.trim();
+  if (chineseImageInput) {
+    inputs.push(chineseImageInput);
+  } else if (/upload(?:ed)?\s+(?:an?\s+)?(?:image|photo|picture)|provided\s+(?:an?\s+)?(?:image|photo|picture)|input image|上传(?:的)?(?:图片|图像|照片)|提供(?:的)?(?:图片|图像|照片)/i.test(source)) {
+    add("Uploaded image", "上传的图片");
+  }
   if (/original image|source image|依据(?:原图|原始图)|基于(?:原图|原始图)|以(?:原图|原始图)为|原图(?:转换|重绘|改造)|原始图(?:转换|重绘|改造)/i.test(source)) add("Original image", "原图");
   if (/reference (?:image|photo|picture)|参考(?:图片|图像|照片)|基于.{0,8}(?:图片|图像|照片)/i.test(source)) add("Reference image", "参考图片");
   if (/screenshots?|screen captures?|截图|屏幕截图/i.test(source)) add("Screenshot", "截图");

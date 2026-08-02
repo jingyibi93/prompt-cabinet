@@ -202,6 +202,23 @@ button:disabled {
   background: #e5e9ec;
 }
 
+.popover-action.update-action {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #81584f;
+}
+
+.update-menu-badge {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: #f1dfd9;
+  color: #9a6558;
+  font-size: 0.64rem;
+  font-weight: 800;
+}
+
 .workspace-entry {
   display: grid;
   min-height: 68px;
@@ -252,6 +269,117 @@ button:disabled {
 
 .dialog-actions {
   justify-content: flex-end;
+}
+
+.onboarding-backdrop {
+  z-index: 70;
+}
+
+.onboarding-panel {
+  display: grid;
+  gap: 22px;
+  width: min(610px, calc(100vw - 44px));
+  padding: 30px;
+  border-radius: 28px;
+}
+
+.onboarding-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.onboarding-header h2 {
+  max-width: 450px;
+  margin: 4px 0 0;
+  color: #2a2e31;
+  font-size: 1.65rem;
+  line-height: 1.28;
+}
+
+.onboarding-progress {
+  flex: 0 0 auto;
+  padding-top: 4px;
+  color: #7a8287;
+  font-size: 0.76rem;
+  font-weight: 750;
+}
+
+.onboarding-steps {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.onboarding-steps span {
+  height: 5px;
+  border-radius: 999px;
+  background: #dbe0e3;
+  box-shadow: inset 1px 1px 2px rgba(161, 170, 176, 0.3);
+}
+
+.onboarding-steps span.active {
+  background: #9db9aa;
+}
+
+.onboarding-steps span.complete {
+  background: #c6d8ce;
+}
+
+.onboarding-content {
+  display: grid;
+  gap: 12px;
+  min-height: 170px;
+  padding: 20px;
+  border: 1px solid rgba(121, 129, 136, 0.16);
+  border-radius: 8px;
+  background: rgba(239, 242, 243, 0.72);
+  box-shadow: inset 3px 3px 8px rgba(178, 185, 190, 0.24), inset -3px -3px 8px rgba(255, 255, 255, 0.88);
+}
+
+.onboarding-eyebrow {
+  margin: 0;
+  color: #758d81;
+  font-size: 0.76rem;
+  font-weight: 850;
+}
+
+.onboarding-content > p:last-of-type {
+  max-width: 500px;
+  margin: 0;
+  color: #626a70;
+  font-size: 0.93rem;
+  line-height: 1.6;
+}
+
+.onboarding-settings-action {
+  justify-self: start;
+  min-height: 36px;
+  margin-top: auto;
+  padding: 0 13px;
+  font-size: 0.8rem;
+}
+
+.onboarding-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.onboarding-footer > div {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.onboarding-footer .pressable,
+.onboarding-footer .ghost-button {
+  min-height: 38px;
+  padding: 0 14px;
+  font-size: 0.82rem;
 }
 
 .help-guide-backdrop {
@@ -438,6 +566,44 @@ button:disabled {
   color: #596168;
   font-size: 0.85rem;
   line-height: 1.4;
+}
+
+.bulk-import-status-stack {
+  display: grid;
+  min-height: 0;
+  gap: 10px;
+}
+
+.bulk-import-progress {
+  display: grid;
+  gap: 10px;
+  padding: 13px 16px;
+  border-radius: 8px;
+  background: #e7ebee;
+  box-shadow: inset 3px 3px 8px rgba(177, 184, 190, 0.48), inset -3px -3px 8px #ffffff;
+}
+
+.bulk-import-progress > div {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.bulk-import-progress strong {
+  color: #4b5358;
+  font-size: 0.86rem;
+}
+
+.bulk-import-progress span {
+  color: #777f84;
+  font-size: 0.76rem;
+}
+
+.bulk-import-progress progress {
+  width: 100%;
+  height: 7px;
+  accent-color: #9db9aa;
 }
 
 .bulk-import-empty {
@@ -852,6 +1018,17 @@ button:disabled {
     transform 160ms ease,
     box-shadow 160ms ease,
     background 160ms ease;
+}
+
+.nav-pills .update-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 6px;
+  border-radius: 50%;
+  background: #c78372;
+  box-shadow: 1px 1px 3px rgba(137, 84, 70, 0.3);
+  vertical-align: middle;
 }
 
 .nav-pills button.active,
@@ -1495,6 +1672,35 @@ select {
 
 .settings-grid > .settings-note {
   grid-column: 1 / -1;
+}
+
+.update-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px 20px;
+  border-radius: 8px;
+  background: #e7ebee;
+  box-shadow: inset 4px 4px 9px rgba(177, 184, 190, 0.55), inset -4px -4px 9px #ffffff;
+}
+
+.update-card.available {
+  background: #ece6df;
+}
+
+.update-card > div:first-child {
+  display: grid;
+  gap: 5px;
+}
+
+.update-card strong {
+  color: #3f4549;
+}
+
+.update-card span {
+  color: #727a80;
+  font-size: 0.88rem;
 }
 
 .shortcut-settings-list {

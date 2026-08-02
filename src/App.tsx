@@ -9,7 +9,7 @@ import {
   saveApiSettings,
   testApiConnection,
 } from "./apiClient";
-import { analyzePrompt, categories as builtInCategories, isChinesePrompt } from "./promptEngine";
+import { analyzePrompt, categories as builtInCategories, cleanPromptTags, isChinesePrompt } from "./promptEngine";
 import { loadPrompts, normalizeImportedPrompts, savePrompts } from "./storage";
 import {
   LanguageProvider,
@@ -17,11 +17,11 @@ import {
   type AnalysisLanguageSetting,
   type UiLanguageSetting,
 } from "./i18n";
-import type { ApiSettings, PromptCategory, PromptItem, QuickShortcutSettings, RewriteSegment } from "./types";
+import type { ApiSettings, AppUpdateInfo, PromptCategory, PromptItem, QuickShortcutSettings, RewriteSegment } from "./types";
 
 type View = "dashboard" | "add" | "library" | "detail" | "edit" | "settings";
 type WorkspaceScope = "all" | "category";
-type SettingsSection = "analyze" | "shortcuts" | "language";
+type SettingsSection = "analyze" | "shortcuts" | "language" | "updates";
 type CustomCategory = {
   name: PromptCategory;
   color: string;
@@ -30,6 +30,10 @@ type BulkImportImage = {
   id: string;
   name: string;
   dataUrl: string;
+};
+type BulkImportProgress = {
+  current: number;
+  total: number;
 };
 type BulkImportItem = {
   id: string;
@@ -43,6 +47,7 @@ type BulkImportItem = {
   categoryEdited?: boolean;
   categoryAiAnalyzed?: boolean;
   tags: string[];
+  inputNeeded: string[];
   previewImage?: string;
   imageId: string;
   included: boolean;
@@ -51,6 +56,7 @@ type BulkImportItem = {
 const tagTone = ["mint", "peach", "rose", "stone"];
 const CUSTOM_CATEGORIES_KEY = "prompt-cabinet-custom-categories";
 const HIDDEN_CATEGORIES_KEY = "prompt-cabinet-hidden-categories";
+const ONBOARDING_COMPLETE_KEY = "prompt-cabinet-onboarding-complete-v1";
 const QUICK_ADD_INBOX_TARGET = "__prompt-cabinet-quick-inbox__";
 const QUICK_BROWSE_INBOX = "Inbox";
 type QuickMode = "capture" | "insert";
@@ -124,6 +130,10 @@ function loadHiddenCategories(): PromptCategory[] {
   }
 }
 
+function loadOnboardingComplete() {
+  return localStorage.getItem(ONBOARDING_COMPLETE_KEY) === "1";
+}
+
 export default function App() {
   if (isQuickPreviewMode()) return <QuickImagePreviewApp />;
   return (
@@ -134,7 +144,7 @@ export default function App() {
 }
 
 function AppContent() {
-  const { t } = useLanguage();
+  const { analysisLanguage, t } = useLanguage();
   if (isQuickAddMode()) return <QuickAddApp />;
 
   const [prompts, setPrompts] = useState<PromptItem[]>([]);
@@ -147,6 +157,8 @@ function AppContent() {
   const [openDataMenu, setOpenDataMenu] = useState<"window" | "setting" | "data" | null>(null);
   const [settingsSection, setSettingsSection] = useState<SettingsSection>("analyze");
   const [apiSettings, setApiSettings] = useState<ApiSettings>(defaultApiSettings);
+  const [updateInfo, setUpdateInfo] = useState<AppUpdateInfo | null>(null);
+  const [isCheckingUpdates, setIsCheckingUpdates] = useState(false);
   const [quickShortcuts, setQuickShortcuts] = useState<QuickShortcutSettings>(defaultQuickShortcutSettings);
   const [alwaysOnTop, setAlwaysOnTop] = useState(false);
   const [customCategories, setCustomCategories] = useState<CustomCategory[]>(() => loadCustomCategories());
@@ -157,13 +169,46 @@ function AppContent() {
   const [isBulkImportOpen, setIsBulkImportOpen] = useState(false);
   const [isExportWorkbenchOpen, setIsExportWorkbenchOpen] = useState(false);
   const [isHelpGuideOpen, setIsHelpGuideOpen] = useState(false);
+  const [isOnboardingOpen, setIsOnboardingOpen] = useState(() => !loadOnboardingComplete());
+  const [onboardingStep, setOnboardingStep] = useState(0);
   const [bulkImportItems, setBulkImportItems] = useState<BulkImportItem[]>([]);
   const [bulkImportImages, setBulkImportImages] = useState<BulkImportImage[]>([]);
   const [bulkImportNotice, setBulkImportNotice] = useState("");
   const [isReadingBulkFiles, setIsReadingBulkFiles] = useState(false);
+  const [isImportingBulkItems, setIsImportingBulkItems] = useState(false);
+  const [bulkImportProgress, setBulkImportProgress] = useState<BulkImportProgress | null>(null);
   const [isAiMatchingBulkImages, setIsAiMatchingBulkImages] = useState(false);
   const [isAiClassifyingBulkItems, setIsAiClassifyingBulkItems] = useState(false);
   const bulkImportInputRef = useRef<HTMLInputElement>(null);
+
+  async function checkForUpdates() {
+    setIsCheckingUpdates(true);
+    try {
+      const result = await window.promptCabinetWindow?.checkForUpdates();
+      setUpdateInfo(result ?? {
+        status: "unavailable",
+        currentVersion: "",
+        message: t("Update checks are available in the Electron app.", "更新检查仅适用于 Electron 桌面应用。"),
+      });
+    } catch (error) {
+      setUpdateInfo({
+        status: "unavailable",
+        currentVersion: "",
+        message: error instanceof Error ? error.message : t("Unable to check for updates.", "暂时无法检查更新。"),
+      });
+    } finally {
+      setIsCheckingUpdates(false);
+    }
+  }
+
+  async function openUpdateDownload() {
+    if (!updateInfo?.releaseUrl) return;
+    await window.promptCabinetWindow?.openUpdateDownload(updateInfo.releaseUrl);
+  }
+
+  useEffect(() => {
+    void checkForUpdates();
+  }, []);
 
   useEffect(() => {
     if (!openDataMenu) return;
@@ -393,6 +438,7 @@ function AppContent() {
     setBulkImportItems([]);
     setBulkImportImages([]);
     setBulkImportNotice("");
+    setBulkImportProgress(null);
   }
 
   function closeExportWorkbench() {
@@ -479,13 +525,14 @@ function AppContent() {
             titleAnalyzed: shouldApplyAiTitle || item.titleAnalyzed,
             category: classification.category,
             categoryAiAnalyzed: true,
-            tags: mergeUnique(classification.tags, item.tags),
+            tags: classification.tags.length ? classification.tags : item.tags,
+            inputNeeded: classification.inputNeeded.length ? classification.inputNeeded : item.inputNeeded,
           };
         }),
       );
       setBulkImportNotice(
         result.classifications.length
-          ? t(`AI improved ${result.classifications.length} prompt categories. You can still adjust any row manually.`, `AI 已优化 ${result.classifications.length} 条 Prompt 的分类，仍可逐条手动调整。`)
+          ? t(`AI improved ${result.classifications.length} prompt classifications and input fields. You can still adjust any row manually.`, `AI 已优化 ${result.classifications.length} 条 Prompt 的分类和所需输入，仍可逐条手动调整。`)
           : t("AI did not return any usable categories. Try again or adjust the rows manually.", "AI 没有返回可用分类，请重试或逐条手动调整。"),
       );
     } catch (error) {
@@ -555,15 +602,27 @@ function AppContent() {
     }
   }
 
-  function importBulkItems() {
+  async function importBulkItems() {
     const selected = bulkImportItems.filter((item) => item.included && item.originalPrompt.trim());
     if (!selected.length) {
       setBulkImportNotice(t("Select at least one prompt to import.", "请至少选择一条 Prompt 导入。"));
       return;
     }
     const imagesById = new Map(bulkImportImages.map((image) => [image.id, image.dataUrl]));
-    const importedPrompts = selected.map((item) =>
-      autoClassifyImportedPrompt({
+    const shouldUseApi = apiSettings.enabled && apiSettings.provider !== "mock";
+    setIsImportingBulkItems(true);
+    setBulkImportProgress({ current: 0, total: selected.length });
+    setBulkImportNotice(
+      shouldUseApi
+        ? t(`Analyzing ${selected.length} prompts with your connected API...`, `正在使用已连接的 API 分析 ${selected.length} 条 Prompt...`)
+        : t(`Analyzing ${selected.length} prompts locally...`, `正在使用本地规则分析 ${selected.length} 条 Prompt...`),
+    );
+
+    const importedPrompts: PromptItem[] = [];
+    let apiFallbackCount = 0;
+    let apiAnalyzedCount = 0;
+    for (const [index, item] of selected.entries()) {
+      const basePrompt = autoClassifyImportedPrompt({
         id: item.id,
         status: "saved",
         // File names and first lines are only preview labels. Generate a useful library title on import.
@@ -571,7 +630,7 @@ function AppContent() {
         originalPrompt: item.originalPrompt.trim(),
         refinedPrompt: item.originalPrompt.trim(),
         useCase: "",
-        inputNeeded: [],
+        inputNeeded: item.inputNeeded,
         expectedOutput: "",
         tags: item.tags,
         platform: "ChatGPT",
@@ -579,15 +638,47 @@ function AppContent() {
         category: item.category,
         createdAt: new Date().toISOString(),
         previewImage: imagesById.get(item.imageId) ?? item.previewImage,
-      }, item.categoryEdited || item.categoryAiAnalyzed ? item.category : undefined),
-    );
+      }, item.categoryEdited || item.categoryAiAnalyzed ? item.category : undefined);
+
+      if (shouldUseApi) {
+        try {
+          const analyzed = await analyzePromptWithApi(basePrompt.originalPrompt, basePrompt.notes, apiSettings, analysisLanguage);
+          apiAnalyzedCount += 1;
+          importedPrompts.push({
+            ...basePrompt,
+            title: item.titleEdited ? basePrompt.title : analyzed.title || basePrompt.title,
+            category: item.categoryEdited ? basePrompt.category : analyzed.category || basePrompt.category,
+            tags: analyzed.tags.length ? analyzed.tags : basePrompt.tags,
+            platform: analyzed.platform || basePrompt.platform,
+            useCase: analyzed.useCase || basePrompt.useCase,
+            inputNeeded: analyzed.inputNeeded.length ? analyzed.inputNeeded : basePrompt.inputNeeded,
+            expectedOutput: analyzed.expectedOutput || basePrompt.expectedOutput,
+            refinedPrompt: analyzed.refinedPrompt || basePrompt.refinedPrompt,
+          });
+        } catch {
+          apiFallbackCount += 1;
+          importedPrompts.push(basePrompt);
+        }
+      } else {
+        importedPrompts.push(basePrompt);
+      }
+      setBulkImportProgress({ current: index + 1, total: selected.length });
+    }
+
     const { prompts: mergedPrompts, added, updated } = mergeImportedPrompts(prompts, importedPrompts);
     setPrompts(mergedPrompts);
     setSelectedId(importedPrompts[0]?.id ?? mergedPrompts[0]?.id ?? "");
     setCategoryFilter("All");
     setView("library");
+    setIsImportingBulkItems(false);
     closeBulkImportWorkbench();
-    window.alert(t(`Imported ${selected.length} prompts. Added ${added}, updated ${updated}.`, `已导入 ${selected.length} 条 Prompt，新增 ${added} 条，更新 ${updated} 条。`));
+    const analysisMessage = shouldUseApi
+      ? t(
+        ` API analyzed ${apiAnalyzedCount} prompt(s)${apiFallbackCount ? `; ${apiFallbackCount} used local fallback after an API failure.` : "."}`,
+        `其中 ${apiAnalyzedCount} 条已由 API 分析${apiFallbackCount ? `；${apiFallbackCount} 条因 API 失败，已使用本地规则补全。` : "。"}`,
+      )
+      : t(" All prompts used local rules.", "全部使用本地规则分析。");
+    window.alert(t(`Imported ${selected.length} prompts. Added ${added}, updated ${updated}.${analysisMessage}`, `已导入 ${selected.length} 条 Prompt，新增 ${added} 条，更新 ${updated} 条。${analysisMessage}`));
   }
 
   function exportWorkspacePrompts(selectedIds: string[], mode: WorkspaceScope) {
@@ -674,6 +765,7 @@ function AppContent() {
               onClick={() => setOpenDataMenu((current) => (current === "setting" ? null : "setting"))}
             >
               {t("Setting", "设置")}
+              {updateInfo?.status === "update-available" && <span className="update-dot" aria-label={t("Update available", "有更新可用")} />}
             </button>
             {openDataMenu === "setting" && (
               <div className="data-popover tools-popover lift-card">
@@ -706,6 +798,17 @@ function AppContent() {
                   }}
                 >
                   {t("Language Settings", "语言设置")}
+                </button>
+                <button
+                  className={updateInfo?.status === "update-available" ? "popover-action update-action" : "popover-action"}
+                  onClick={() => {
+                    setSettingsSection("updates");
+                    setView("settings");
+                    setOpenDataMenu(null);
+                  }}
+                >
+                  {updateInfo?.status === "update-available" ? t("Update available", "有更新可用") : t("Check for Updates", "检查更新")}
+                  {updateInfo?.status === "update-available" && <span className="update-menu-badge">NEW</span>}
                 </button>
                 <button className="popover-action" onClick={() => setOpenDataMenu("data")}>
                   {t("Export / Import", "导出 / 导入")}
@@ -841,6 +944,14 @@ function AppContent() {
           />
         )}
         {view === "settings" && settingsSection === "language" && <LanguageSettingsPage />}
+        {view === "settings" && settingsSection === "updates" && (
+          <UpdateSettingsPage
+            updateInfo={updateInfo}
+            isChecking={isCheckingUpdates}
+            onCheck={() => void checkForUpdates()}
+            onDownload={() => void openUpdateDownload()}
+          />
+        )}
       </main>
       {isCategoryDialogOpen && (
         <div className="modal-backdrop" role="presentation" onMouseDown={closeCustomCategoryDialog}>
@@ -909,7 +1020,9 @@ function AppContent() {
           canAiEnhanceImports={apiSettings.enabled && apiSettings.provider !== "mock"}
           isAiMatchingImages={isAiMatchingBulkImages}
           isAiClassifyingItems={isAiClassifyingBulkItems}
-          onImport={importBulkItems}
+          isImporting={isImportingBulkItems}
+          progress={bulkImportProgress}
+          onImport={() => void importBulkItems()}
         />
       )}
       {isExportWorkbenchOpen && (
@@ -937,6 +1050,26 @@ function AppContent() {
           }}
         />
       )}
+      {isOnboardingOpen && (
+        <OnboardingGuide
+          step={onboardingStep}
+          onStepChange={setOnboardingStep}
+          onComplete={() => {
+            localStorage.setItem(ONBOARDING_COMPLETE_KEY, "1");
+            setIsOnboardingOpen(false);
+          }}
+          onOpenShortcutSettings={() => {
+            setSettingsSection("shortcuts");
+            setView("settings");
+            setIsOnboardingOpen(false);
+          }}
+          onOpenAnalyzeSettings={() => {
+            setSettingsSection("analyze");
+            setView("settings");
+            setIsOnboardingOpen(false);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -955,6 +1088,8 @@ function BulkImportWorkbench({
   canAiEnhanceImports,
   isAiMatchingImages,
   isAiClassifyingItems,
+  isImporting,
+  progress,
   onImport,
 }: {
   items: BulkImportItem[];
@@ -970,6 +1105,8 @@ function BulkImportWorkbench({
   canAiEnhanceImports: boolean;
   isAiMatchingImages: boolean;
   isAiClassifyingItems: boolean;
+  isImporting: boolean;
+  progress: BulkImportProgress | null;
   onImport: () => void;
 }) {
   const { t } = useLanguage();
@@ -977,7 +1114,7 @@ function BulkImportWorkbench({
   const [editingCategoryId, setEditingCategoryId] = useState("");
 
   return (
-    <div className="modal-backdrop bulk-import-backdrop" role="presentation" onMouseDown={onClose}>
+    <div className="modal-backdrop bulk-import-backdrop" role="presentation" onMouseDown={isImporting ? undefined : onClose}>
       <section
         className="bulk-import-workbench lift-card"
         role="dialog"
@@ -989,22 +1126,22 @@ function BulkImportWorkbench({
           <div>
             <p className="eyebrow">{t("Import workspace", "导入工作台")}</p>
             <h2 id="bulk-import-title">{t("Collect prompt files", "批量收集 Prompt 文件")}</h2>
-            <p>{t("Choose only the files you want to collect. Everything is read locally.", "只读取你主动选择的文件，所有识别都在本地完成。")}</p>
+            <p>{t("Choose the files you want to collect. Connected AI is used when you import.", "选择要收集的文件；点击导入时会根据分析设置使用已连接的 AI。")}</p>
           </div>
-          <button className="bulk-import-close" onClick={onClose} aria-label={t("Close", "关闭")} title={t("Close", "关闭")}>
+          <button className="bulk-import-close" onClick={onClose} disabled={isImporting} aria-label={t("Close", "关闭")} title={t("Close", "关闭")}>
             ×
           </button>
         </header>
 
         <div className="bulk-import-toolbar">
-          <button className="pressable" onClick={onPickFiles} disabled={isReading}>
+          <button className="pressable" onClick={onPickFiles} disabled={isReading || isImporting}>
             {isReading ? t("Reading files...", "正在读取文件...") : t("Choose Files", "选择文件")}
           </button>
           {items.length > 0 && (
             <button
               className="ghost-button bulk-import-ai-classify"
               onClick={onAiClassify}
-              disabled={isAiClassifyingItems}
+              disabled={isAiClassifyingItems || isImporting}
               title={
                 canAiEnhanceImports
                   ? t("Use Local Codex or your API to improve automatic categories", "使用本地 Codex 或 API 优化自动分类")
@@ -1018,7 +1155,7 @@ function BulkImportWorkbench({
             <button
               className="ghost-button bulk-import-ai-match"
               onClick={onAiMatchImages}
-              disabled={!canAiEnhanceImports || isAiMatchingImages}
+              disabled={!canAiEnhanceImports || isAiMatchingImages || isImporting}
               title={
                 canAiEnhanceImports
                   ? t("Match only the remaining unlinked images with Local Codex or your vision API", "使用本地 Codex 或视觉 API 匹配剩余未关联图片")
@@ -1032,7 +1169,18 @@ function BulkImportWorkbench({
           <span>{t(`${selectedCount} selected`, `已选择 ${selectedCount} 条`)}</span>
         </div>
 
-        {notice && <p className="bulk-import-notice">{notice}</p>}
+        <div className="bulk-import-status-stack" aria-live="polite">
+          {notice && <p className="bulk-import-notice">{notice}</p>}
+          {isImporting && progress && (
+            <div className="bulk-import-progress" role="status">
+              <div>
+                <strong>{t(`Analyzing ${progress.current} of ${progress.total}`, `正在分析第 ${progress.current} / ${progress.total} 条`)}</strong>
+                <span>{t("Keep this window open while import finishes.", "导入完成前请保持此窗口打开。")}</span>
+              </div>
+              <progress value={progress.current} max={progress.total} />
+            </div>
+          )}
+        </div>
 
         {!items.length ? (
           <div className="bulk-import-empty">
@@ -1116,13 +1264,15 @@ function BulkImportWorkbench({
 
         <footer className="bulk-import-footer">
           <span className="bulk-workspace-hint">
-            {t("Each prompt keeps the category shown in its row.", "每条 Prompt 会保留所在行显示的分类。")}
+            {t("Import analyzes each prompt with your connected AI, or local rules when no AI is connected.", "导入时会用已连接的 AI 分析每条 Prompt；未连接 AI 时使用本地规则。")}
           </span>
           <div className="form-actions">
-            <button className="pressable" onClick={onImport} disabled={!selectedCount}>
-              {t(`Import ${selectedCount} Prompts`, `导入 ${selectedCount} 条 Prompt`)}
+            <button className="pressable" onClick={onImport} disabled={!selectedCount || isImporting}>
+              {isImporting
+                ? t("Analyzing and importing...", "正在分析并导入...")
+                : t(`Import ${selectedCount} Prompts`, `导入 ${selectedCount} 条 Prompt`)}
             </button>
-            <button className="ghost-button" onClick={onClose}>
+            <button className="ghost-button" onClick={onClose} disabled={isImporting}>
               {t("Cancel", "取消")}
             </button>
           </div>
@@ -1256,6 +1406,93 @@ function ExportWorkbench({
             </button>
             <button className="ghost-button" onClick={onClose}>
               {t("Cancel", "取消")}
+            </button>
+          </div>
+        </footer>
+      </section>
+    </div>
+  );
+}
+
+function OnboardingGuide({
+  step,
+  onStepChange,
+  onComplete,
+  onOpenShortcutSettings,
+  onOpenAnalyzeSettings,
+}: {
+  step: number;
+  onStepChange: (step: number) => void;
+  onComplete: () => void;
+  onOpenShortcutSettings: () => void;
+  onOpenAnalyzeSettings: () => void;
+}) {
+  const { t } = useLanguage();
+  const steps = [
+    {
+      eyebrow: t("Start with Quick Add", "先设置快速面板"),
+      title: t("Save and reuse prompts without leaving your work.", "不离开当前工作，也能收集和调用 Prompt。"),
+      description: t("Set the shortcut you find easiest to remember. It opens Quick Add, where Capture saves copied text and Insert places a chosen prompt in the active text field.", "设置一个顺手的快捷键，用它打开快速面板。收集模式可保存复制的内容，调用模式可将选中的 Prompt 插入当前输入框。"),
+      action: t("Open Shortcut Settings", "打开快捷键设置"),
+      onAction: onOpenShortcutSettings,
+    },
+    {
+      eyebrow: t("Choose how prompts are analyzed", "选择 Prompt 的分析方式"),
+      title: t("Make every saved prompt easier to find and reuse.", "让每条保存的 Prompt 更容易查找和复用。"),
+      description: t("Prompt Cabinet can create a focused title, tags, categories, and input hints. Connect Local Codex or an API for richer analysis, or continue with the local rules.", "Prompt Cabinet 会生成贴合内容的标题、标签、分类与所需输入提示。连接本地 Codex 或 API 可获得更完整的分析；也可以先使用本地规则。"),
+      action: t("Open Analyze Settings", "打开分析设置"),
+      onAction: onOpenAnalyzeSettings,
+    },
+    {
+      eyebrow: t("One permission for Insert", "首次调用需要一项权限"),
+      title: t("Insert is ready when you are.", "需要时再开启快速插入即可。"),
+      description: t("The first time you use Insert, macOS will guide you to allow Prompt Cabinet in Accessibility. After enabling it, fully quit and reopen Prompt Cabinet once.", "首次使用调用功能时，macOS 会引导你在“辅助功能”中允许 Prompt Cabinet。开启后，请完全退出并重新打开 Prompt Cabinet 一次。"),
+      action: null,
+      onAction: undefined,
+    },
+  ];
+  const currentStep = steps[step] ?? steps[0];
+  const isLastStep = step === steps.length - 1;
+
+  return (
+    <div className="modal-backdrop onboarding-backdrop" role="presentation">
+      <section className="onboarding-panel lift-card" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
+        <header className="onboarding-header">
+          <div>
+            <p className="eyebrow">{t("Welcome to Prompt Cabinet", "欢迎使用 Prompt Cabinet")}</p>
+            <h2 id="onboarding-title">{currentStep.title}</h2>
+          </div>
+          <span className="onboarding-progress">{t(`Step ${step + 1} of ${steps.length}`, `第 ${step + 1} 步，共 ${steps.length} 步`)}</span>
+        </header>
+
+        <div className="onboarding-steps" aria-label={t("Getting started steps", "首次使用步骤")}>
+          {steps.map((item, index) => (
+            <span className={index === step ? "active" : index < step ? "complete" : ""} key={item.eyebrow} aria-hidden="true" />
+          ))}
+        </div>
+
+        <section className="onboarding-content">
+          <p className="onboarding-eyebrow">{currentStep.eyebrow}</p>
+          <p>{currentStep.description}</p>
+          {currentStep.action && currentStep.onAction && (
+            <button className="ghost-button onboarding-settings-action" onClick={currentStep.onAction}>
+              {currentStep.action}
+            </button>
+          )}
+        </section>
+
+        <footer className="onboarding-footer">
+          <button className="ghost-button" onClick={onComplete}>
+            {t("Skip for now", "稍后设置")}
+          </button>
+          <div>
+            {step > 0 && (
+              <button className="ghost-button" onClick={() => onStepChange(step - 1)}>
+                {t("Back", "上一步")}
+              </button>
+            )}
+            <button className="pressable" onClick={() => (isLastStep ? onComplete() : onStepChange(step + 1))}>
+              {isLastStep ? t("Start using Prompt Cabinet", "开始使用 Prompt Cabinet") : t("Continue", "继续")}
             </button>
           </div>
         </footer>
@@ -1851,7 +2088,7 @@ function getPromptInputPatterns(variable: string) {
   if (normalized === "design brief" || variable === "设计需求") {
     return [/\bdesign\s+brief\b/gi, /设计需求/g];
   }
-  return [];
+  return variable.trim() ? [new RegExp(escapeRegExp(variable.trim()), "gi")] : [];
 }
 
 function escapeRegExp(value: string) {
@@ -2137,7 +2374,7 @@ function PromptForm({
           useCase: apiResult.useCase,
           inputNeeded: apiResult.inputNeeded,
           expectedOutput: apiResult.expectedOutput,
-          tags: mergeUnique(apiResult.tags, customCategory ? [customCategory] : []),
+      tags: apiResult.tags.length ? apiResult.tags : analyzed.tags,
           platform: apiResult.platform,
         };
       } catch (error) {
@@ -2470,6 +2707,62 @@ function EmptyPromptState({ onNew }: { onNew: () => void }) {
         {t("New Prompt", "新建 Prompt")}
       </button>
     </div>
+  );
+}
+
+function UpdateSettingsPage({
+  updateInfo,
+  isChecking,
+  onCheck,
+  onDownload,
+}: {
+  updateInfo: AppUpdateInfo | null;
+  isChecking: boolean;
+  onCheck: () => void;
+  onDownload: () => void;
+}) {
+  const { t } = useLanguage();
+  const updateAvailable = updateInfo?.status === "update-available";
+  return (
+    <section className="settings-panel lift-card">
+      <div>
+        <p className="eyebrow">{t("App Updates", "应用更新")}</p>
+        <h1>{t("Check for Updates", "检查更新")}</h1>
+        <p className="settings-copy">
+          {t("Prompt Cabinet checks GitHub Releases for new beta versions. Download the latest DMG and replace the app in Applications; your local prompts stay on this Mac.", "Prompt Cabinet 会检查 GitHub Releases 中的 beta 版本。下载最新 DMG 后覆盖“应用程序”里的旧版本，本机 Prompt 数据会保留。")}
+        </p>
+      </div>
+
+      <div className={updateAvailable ? "update-card available" : "update-card"}>
+        <div>
+          <strong>
+            {updateAvailable
+              ? t(`Version ${updateInfo.latestVersion} is available`, `发现新版本 ${updateInfo.latestVersion}`)
+              : updateInfo?.status === "up-to-date"
+                ? t("You are up to date", "当前已是最新版本")
+                : t("Update status unavailable", "暂时无法获取更新状态")}
+          </strong>
+          <span>
+            {updateInfo?.currentVersion
+              ? t(`Current version: ${updateInfo.currentVersion}`, `当前版本：${updateInfo.currentVersion}`)
+              : t("Current version unavailable", "暂时无法读取当前版本")}
+          </span>
+          {updateInfo?.releaseName && <span>{updateInfo.releaseName}</span>}
+        </div>
+        <div className="form-actions">
+          <button className="ghost-button" onClick={onCheck} disabled={isChecking}>
+            {isChecking ? t("Checking...", "检查中...") : t("Check Again", "再次检查")}
+          </button>
+          {updateAvailable && (
+            <button className="pressable" onClick={onDownload}>
+              {t("Download Update", "下载更新")}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {updateInfo?.status === "unavailable" && updateInfo.message && <div className="settings-status">{updateInfo.message}</div>}
+    </section>
   );
 }
 
@@ -3009,6 +3302,7 @@ function promptToBulkImportItem(prompt: PromptItem, sourceName: string): BulkImp
     originalPrompt: prompt.originalPrompt,
     category: prompt.category || "Product",
     tags: prompt.tags ?? [],
+    inputNeeded: prompt.inputNeeded ?? [],
     previewImage: prompt.previewImage,
     imageId: "",
     included: true,
@@ -3029,6 +3323,11 @@ function genericValueToBulkItem(value: unknown, sourceName: string, index: numbe
     : typeof value.tags === "string"
       ? value.tags.split(",").map((tag) => tag.trim()).filter(Boolean)
       : [];
+  const inputNeeded = Array.isArray(value.inputNeeded)
+    ? value.inputNeeded.map(String).map((input) => input.trim()).filter(Boolean)
+    : typeof value.inputNeeded === "string"
+      ? value.inputNeeded.split(",").map((input) => input.trim()).filter(Boolean)
+      : [];
   return {
     id: crypto.randomUUID(),
     sourceName,
@@ -3037,6 +3336,7 @@ function genericValueToBulkItem(value: unknown, sourceName: string, index: numbe
     originalPrompt,
     category: typeof value.category === "string" && value.category.trim() ? value.category.trim() : "Product",
     tags,
+    inputNeeded,
     previewImage: typeof value.previewImage === "string" && value.previewImage.startsWith("data:image/") ? value.previewImage : undefined,
     imageId: "",
     included: true,
@@ -3058,6 +3358,7 @@ function createBulkTextItem(block: string, sourceName: string, index: number) {
     originalPrompt,
     category: "Product",
     tags: [],
+    inputNeeded: [],
     imageId: "",
     included: true,
   } satisfies BulkImportItem;
@@ -3166,7 +3467,7 @@ function autoClassifyImportedPrompt(prompt: PromptItem, forcedCategory?: PromptC
     status: "saved",
     title: genericTitle ? analyzed.title : importedTitle,
     category,
-    tags: mergeUnique(analyzed.tags, prompt.tags),
+    tags: cleanPromptTags(mergeUnique(analyzed.tags, prompt.tags), category, analyzed.platform, prompt.originalPrompt),
     platform: prompt.platform.trim() && prompt.platform !== "ChatGPT" ? prompt.platform : analyzed.platform,
     useCase: prompt.useCase.trim() && prompt.useCase !== "Saved prompt for future reuse."
       ? prompt.useCase
@@ -3194,7 +3495,8 @@ function mergeImportedPrompts(existingPrompts: PromptItem[], importedPrompts: Pr
         ...prompt,
         id: previous.id,
         createdAt: previous.createdAt,
-        tags: mergeUnique(prompt.tags, previous.tags),
+        // Re-imported AI analysis is newer than the previous automatic tags.
+        tags: prompt.tags.length ? prompt.tags : previous.tags,
       };
       updated += 1;
       return;

@@ -1,0 +1,62 @@
+name: Build Windows Installer
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Existing GitHub Release tag to receive the installer"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.9.0
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Prepare the macOS-only paste helper placeholder
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path electron/bin
+          Set-Content -NoNewline -Path electron/bin/prompt-cabinet-paste -Value "Windows does not use the macOS paste helper."
+
+      - name: Build Windows x64 installer
+        run: pnpm run desktop:package:win
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Prompt-Cabinet-Windows-x64
+          path: release/*-win-x64-setup.exe
+          if-no-files-found: error
+
+      - name: Attach installer to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/') || inputs.release_tag != ''
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+        run: |
+          $installer = Get-ChildItem release -Filter "*-win-x64-setup.exe" | Select-Object -First 1
+          gh release upload $env:RELEASE_TAG $installer.FullName --clobber

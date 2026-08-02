@@ -8,6 +8,8 @@ const dataFileName = "prompt-cabinet-data.json";
 const settingsFileName = "prompt-cabinet-settings.json";
 const windowSettingsFileName = "prompt-cabinet-window.json";
 const appBundleId = "com.promptcabinet.app";
+const updateRepository = "jingyibi93/prompt-cabinet";
+const updateReleasePrefix = `https://github.com/${updateRepository}/releases/`;
 const validCategories = ["Design", "Writing", "Research", "Coding", "Image", "Video", "Career", "Product"];
 const defaultQuickShortcutSettings = Object.freeze({
   openQuickAdd: "CommandOrControl+Alt+P",
@@ -109,12 +111,13 @@ function buildPromptClassificationOutputSchema(categories) {
         items: {
           type: "object",
           additionalProperties: false,
-          required: ["id", "title", "category", "tags"],
+          required: ["id", "title", "category", "tags", "inputNeeded"],
           properties: {
             id: { type: "string" },
             title: { type: "string" },
             category: { type: "string", enum: categories },
             tags: { type: "array", items: { type: "string" } },
+            inputNeeded: { type: "array", items: { type: "string" } },
           },
         },
       },
@@ -315,6 +318,85 @@ function getProvider(settings) {
   return settings?.enabled ? "openai-compatible" : "mock";
 }
 
+async function checkForUpdates() {
+  const currentVersion = app.getVersion();
+  try {
+    const response = await net.fetch(`https://api.github.com/repos/${updateRepository}/releases?per_page=30`, {
+      headers: {
+        Accept: "application/vnd.github+json",
+        "User-Agent": "Prompt-Cabinet",
+      },
+    });
+    if (!response.ok) throw new Error(`GitHub returned ${response.status}.`);
+    const payload = await response.json();
+    const releases = Array.isArray(payload) ? payload : [];
+    const candidates = releases
+      .filter((release) => !release?.draft && typeof release?.tag_name === "string" && typeof release?.html_url === "string")
+      .map((release) => ({
+        version: normalizeReleaseVersion(release.tag_name),
+        name: typeof release.name === "string" && release.name.trim() ? release.name.trim() : release.tag_name,
+        url: release.html_url,
+        publishedAt: typeof release.published_at === "string" ? release.published_at : "",
+      }))
+      .filter((release) => Boolean(release.version));
+    const latest = candidates.sort((left, right) => compareVersions(right.version, left.version))[0];
+    if (!latest) throw new Error("No downloadable releases were found.");
+    const updateAvailable = compareVersions(latest.version, currentVersion) > 0;
+    return {
+      status: updateAvailable ? "update-available" : "up-to-date",
+      currentVersion,
+      latestVersion: latest.version,
+      releaseName: latest.name,
+      releaseUrl: latest.url,
+      publishedAt: latest.publishedAt,
+    };
+  } catch (error) {
+    return {
+      status: "unavailable",
+      currentVersion,
+      message: error instanceof Error ? error.message : "Unable to check for updates.",
+    };
+  }
+}
+
+function normalizeReleaseVersion(value) {
+  return String(value || "").trim().replace(/^v/i, "");
+}
+
+function compareVersions(left, right) {
+  const parse = (value) => {
+    const match = normalizeReleaseVersion(value).match(/^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/);
+    if (!match) return undefined;
+    return { core: match.slice(1, 4).map(Number), prerelease: match[4] ?? "" };
+  };
+  const a = parse(left);
+  const b = parse(right);
+  if (!a || !b) return 0;
+  for (let index = 0; index < a.core.length; index += 1) {
+    if (a.core[index] !== b.core[index]) return a.core[index] > b.core[index] ? 1 : -1;
+  }
+  if (!a.prerelease || !b.prerelease) return a.prerelease === b.prerelease ? 0 : a.prerelease ? -1 : 1;
+  const aParts = a.prerelease.split(".");
+  const bParts = b.prerelease.split(".");
+  for (let index = 0; index < Math.max(aParts.length, bParts.length); index += 1) {
+    const aPart = aParts[index] ?? "";
+    const bPart = bParts[index] ?? "";
+    if (aPart === bPart) continue;
+    const aNumber = /^\d+$/.test(aPart);
+    const bNumber = /^\d+$/.test(bPart);
+    if (aNumber && bNumber) return Number(aPart) > Number(bPart) ? 1 : -1;
+    if (aNumber !== bNumber) return aNumber ? -1 : 1;
+    return aPart.localeCompare(bPart);
+  }
+  return 0;
+}
+
+async function openUpdateDownload(_event, releaseUrl) {
+  if (typeof releaseUrl !== "string" || !releaseUrl.startsWith(updateReleasePrefix)) return false;
+  await shell.openExternal(releaseUrl);
+  return true;
+}
+
 function buildChatCompletionsUrls(baseUrl) {
   const cleanBase = baseUrl.replace(/\/+$/, "");
   if (cleanBase.endsWith("/chat/completions")) return [cleanBase];
@@ -347,15 +429,19 @@ async function callChatCompletions(settings, messages, temperature = 0.2) {
   try {
     // Electron's network stack follows the operating system proxy settings.
     for (const endpoint of buildChatCompletionsUrls(normalized.baseUrl)) {
-      response = await net.fetch(endpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${normalized.apiKey}`,
-        },
-        body: requestBody,
-      });
-      text = await response.text();
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        response = await net.fetch(endpoint, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${normalized.apiKey}`,
+          },
+          body: requestBody,
+        });
+        text = await response.text();
+        if (!isTransientApiStatus(response.status) || attempt === 2) break;
+        await wait(650 * (attempt + 1));
+      }
       if (response.status !== 404 && response.status !== 405) break;
     }
   } catch (error) {
@@ -372,6 +458,10 @@ async function callChatCompletions(settings, messages, temperature = 0.2) {
   const content = data?.choices?.[0]?.message?.content;
   if (typeof content !== "string") throw new Error("API response did not include message content.");
   return JSON.parse(content);
+}
+
+function isTransientApiStatus(status) {
+  return [408, 425, 429, 500, 502, 503, 504].includes(Number(status));
 }
 
 async function testApiConnection(_event, settings) {
@@ -577,8 +667,9 @@ async function classifyPromptsWithApi(_event, payload) {
     "For example, title a dark crevice advertising visual 'Crevice Lightbox Ad Visual', not 'Image Generation'.",
     "Classify by the prompt's intended reusable outcome, not by isolated keywords or the language it is written in.",
     "Use Image for image-generation instructions and Video for video-generation instructions. Use Design for UI/UX, visual layout, graphic design direction, or design critique.",
-    "Return concise useful tags in the prompt's dominant language. Do not duplicate a tag or merely repeat the category name.",
-    "Return JSON only in this shape: {\"classifications\":[{\"id\":\"...\",\"title\":\"...\",\"category\":\"...\",\"tags\":[\"...\"]}]}",
+    "Return 3-6 concise, content-specific tags in the prompt's dominant language. Tags must describe the actual subject, deliverable, technique, setting, or distinctive constraint in the Raw Prompt. Do not copy generic local guesses, do not use the category or platform as a tag, and do not add unrelated style labels that are not explicitly present. Do not duplicate tags.",
+    "Also identify only the actual material the user must supply before this prompt can run. Return the exact replaceable wording from the prompt when clear, and return an empty array when the prompt is self-contained. For example, when a prompt says '参考上传的二维户型图', return that exact phrase rather than a generic category label.",
+    "Return JSON only in this shape: {\"classifications\":[{\"id\":\"...\",\"title\":\"...\",\"category\":\"...\",\"tags\":[\"...\"],\"inputNeeded\":[\"...\"]}]}",
     `Available categories: ${availableCategories.join(", ")}`,
     "",
     ...prompts.map((prompt) => `PROMPT ${prompt.id}\nTitle: ${String(prompt.title || "Untitled").slice(0, 160)}\nText: ${prompt.originalPrompt.slice(0, 1400)}`),
@@ -610,6 +701,7 @@ function normalizePromptClassifications(result, prompts, categories) {
         title: typeof classification?.title === "string" ? classification.title.trim() : "",
         category: typeof classification?.category === "string" ? classification.category.trim() : "",
         tags: Array.isArray(classification?.tags) ? classification.tags.map(String) : [],
+        inputNeeded: Array.isArray(classification?.inputNeeded) ? classification.inputNeeded.map(String).map((input) => input.trim()).filter(Boolean).slice(0, 10) : [],
       }))
       .filter((classification) => promptIds.has(classification.id) && validCategoryNames.has(classification.category) && !seen.has(classification.id))
       .map((classification) => {
@@ -618,7 +710,7 @@ function normalizePromptClassifications(result, prompts, categories) {
         return {
           ...classification,
           title: normalizeAnalysisTitle(classification.title, prompt?.originalPrompt, classification.category),
-          tags: normalizeTags(classification.tags, classification.category),
+          tags: normalizeTags(classification.tags, classification.category, "", prompt?.originalPrompt),
         };
       }),
   };
@@ -649,7 +741,7 @@ function buildAnalyzeSystemPrompt(outputLanguage = "auto") {
     "Use Coding only when the main task is code logic, repository implementation, debugging, APIs, tests, or engineering changes.",
     "If the final output is an image-generation prompt, use Image even if words like UI, asset, icon, or game appear.",
     "If the final output is social copy, caption, post, hashtags, or Xiaohongshu content, use Writing.",
-    "For platform, use the best target AI/workbench platform, usually ChatGPT, Codex, Midjourney, Runway, Claude, or Figma. Do not use generic surfaces like Web unless the prompt is explicitly for web publishing.",
+    "For platform, use the best target AI/workbench platform, usually ChatGPT, Codex, Midjourney, Runway, Claude, or Figma. Do not use generic surfaces like Web unless the prompt is explicitly for web publishing. Keep platform separate from tags.",
     "Make the title specific to the Raw Prompt's distinctive content, not merely its category, platform, or action.",
     "Build the title from the main subject or deliverable plus one or two meaningful differentiators such as style, audience, format, or use case.",
     "Avoid generic titles such as Image Generation, Writing Prompt, Code Development, Research Analysis, or Product Planning when the Raw Prompt contains more specific details.",
@@ -805,11 +897,12 @@ function parseJsonObject(content) {
 function normalizeAnalyzeResult(result, rawPrompt, outputLanguage = "auto") {
   const category = normalizeCategory(result?.category, rawPrompt);
   const useChinese = outputLanguage === "zh" || (outputLanguage !== "en" && isChinesePromptText(rawPrompt));
+  const platform = normalizePlatform(result?.platform, category);
   return {
     title: normalizeAnalysisTitle(result?.title, rawPrompt, category, outputLanguage),
     category,
-    tags: normalizeTags(Array.isArray(result?.tags) ? result.tags.map(String) : [category], category),
-    platform: normalizePlatform(result?.platform, category),
+    tags: normalizeTags(Array.isArray(result?.tags) ? result.tags.map(String) : [], category, platform, rawPrompt),
+    platform,
     useCase: typeof result?.useCase === "string" && result.useCase.trim()
       ? result.useCase.trim()
       : useChinese ? "保存并复用这条提示词。" : "Saved prompt for future reuse.",
@@ -903,17 +996,45 @@ function isChinesePromptText(value) {
   return (String(value).match(/[\u3400-\u9fff]/g) ?? []).length >= 4;
 }
 
-function normalizeTags(tags, fallbackTag) {
+const genericTagAliases = {
+  Design: ["design", "设计", "ui design", "界面设计", "ux design", "用户体验"],
+  Writing: ["writing", "写作", "writing prompt", "写作提示词"],
+  Research: ["research", "研究", "调研", "research prompt", "研究提示词"],
+  Coding: ["coding", "code", "代码", "编程", "development", "开发"],
+  Image: ["image", "图片", "图像", "image prompt", "图像提示词", "生图"],
+  Video: ["video", "视频", "video prompt", "视频提示词"],
+  Career: ["career", "职业", "求职"],
+  Product: ["product", "产品", "product prompt", "产品提示词"],
+};
+const genericPlatformTags = new Set(["chatgpt", "codex", "midjourney", "runway", "claude", "figma", "dalle", "sora"]);
+
+function normalizeTags(tags, fallbackTag = "", platform = "", rawPrompt = "") {
   const seen = new Set();
   const normalized = [];
+  const forbidden = new Set([
+    "prompt", "提示词", "prompting", "ai", fallbackTag, platform,
+    ...(genericTagAliases[fallbackTag] || []),
+  ].map((tag) => normalizeTagKey(tag)));
   tags.forEach((tag) => {
-    const cleanTag = String(tag).trim();
-    const key = cleanTag.toLowerCase();
-    if (!cleanTag || seen.has(key)) return;
+    const cleanTag = String(tag).trim().replace(/\s+/g, " ");
+    const key = normalizeTagKey(cleanTag);
+    if (!key || seen.has(key) || forbidden.has(key) || genericPlatformTags.has(key) || lacksTagEvidence(key, rawPrompt)) return;
     seen.add(key);
     normalized.push(cleanTag);
   });
-  return (normalized.length ? normalized : [fallbackTag]).slice(0, 8);
+  return normalized.slice(0, 6);
+}
+
+function normalizeTagKey(value) {
+  return String(value || "").trim().toLowerCase().replace(/[\s._-]+/g, "");
+}
+
+function lacksTagEvidence(key, rawPrompt) {
+  if (!String(rawPrompt || "").trim()) return false;
+  const source = String(rawPrompt).toLowerCase();
+  if (["neumorphism", "\u65b0\u62df\u6001"].includes(key)) return !containsAny(source, ["neumorphism", "\u65b0\u62df\u6001"]);
+  if (["softui", "\u67d4\u548c\u754c\u9762"].includes(key)) return !containsAny(source, ["soft ui", "neumorphism", "\u65b0\u62df\u6001"]);
+  return false;
 }
 
 function normalizeCategory(category, rawPrompt) {
@@ -1482,6 +1603,8 @@ app.whenReady().then(async () => {
   ipcMain.handle("prompt-cabinet:get-data-path", () => getDataFilePath());
   ipcMain.handle("prompt-cabinet:load-api-settings", readApiSettings);
   ipcMain.handle("prompt-cabinet:save-api-settings", (_event, settings) => writeApiSettings(settings));
+  ipcMain.handle("prompt-cabinet:check-for-updates", checkForUpdates);
+  ipcMain.handle("prompt-cabinet:open-update-download", openUpdateDownload);
   ipcMain.handle("prompt-cabinet:test-api-connection", testApiConnection);
   ipcMain.handle("prompt-cabinet:analyze-prompt", analyzePromptWithApi);
   ipcMain.handle("prompt-cabinet:match-images", matchImagesWithApi);

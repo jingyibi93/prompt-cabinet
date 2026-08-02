@@ -25,6 +25,8 @@ contextBridge.exposeInMainWorld("promptCabinetWindow", {
   setAlwaysOnTop: (enabled) => ipcRenderer.invoke("prompt-cabinet:set-always-on-top", enabled),
   loadShortcuts: () => ipcRenderer.invoke("prompt-cabinet:load-shortcuts"),
   saveShortcuts: (shortcuts) => ipcRenderer.invoke("prompt-cabinet:save-shortcuts", shortcuts),
+  checkForUpdates: () => ipcRenderer.invoke("prompt-cabinet:check-for-updates"),
+  openUpdateDownload: (releaseUrl) => ipcRenderer.invoke("prompt-cabinet:open-update-download", releaseUrl),
   setQuickAddMode: (mode) => ipcRenderer.invoke("prompt-cabinet:set-quick-add-mode", mode),
   setQuickAddImagePreview: (image) => ipcRenderer.invoke("prompt-cabinet:set-quick-add-image-preview", image),
   getQuickAddImagePreview: () => ipcRenderer.invoke("prompt-cabinet:get-quick-add-image-preview"),
