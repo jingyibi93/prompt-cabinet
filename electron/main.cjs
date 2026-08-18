@@ -3,6 +3,7 @@ const fs = require("node:fs/promises");
 const fsSync = require("node:fs");
 const path = require("node:path");
 const { execFile } = require("node:child_process");
+const { normalizeCodexModelId } = require("./codex-models.cjs");
 
 const dataFileName = "prompt-cabinet-data.json";
 const settingsFileName = "prompt-cabinet-settings.json";
@@ -300,6 +301,7 @@ function normalizeQuickShortcutSettings(shortcuts) {
 
 function normalizeApiSettings(settings) {
   const provider = getProvider(settings);
+  const rawModel = typeof settings?.model === "string" ? settings.model.trim() : "";
   return {
     enabled: provider !== "mock" && Boolean(settings?.enabled ?? true),
     provider,
@@ -307,7 +309,7 @@ function normalizeApiSettings(settings) {
       ? settings.baseUrl.trim()
       : "https://api.openai.com/v1",
     apiKey: typeof settings?.apiKey === "string" ? settings.apiKey.trim() : "",
-    model: typeof settings?.model === "string" ? settings.model.trim() : "",
+    model: provider === "codex-local" ? normalizeCodexModelId(rawModel) : rawModel,
   };
 }
 
