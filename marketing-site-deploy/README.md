@@ -19,8 +19,8 @@ Deploy `marketing-site/` as a static directory on Vercel, Netlify, GitHub Pages,
 The primary download buttons currently point to:
 
 ```text
-Mac: https://github.com/jingyibi93/prompt-cabinet/releases/download/v0.1.0-beta.3/Prompt-Cabinet-0.1.0-beta.3-mac-arm64.dmg
-Windows: https://github.com/jingyibi93/prompt-cabinet/releases/download/v0.1.0-beta.3/Prompt-Cabinet-0.1.0-beta.3-win-x64-setup.exe
+Mac: https://github.com/jingyibi93/prompt-cabinet/releases/download/v0.1.0-beta.4/Prompt-Cabinet-0.1.0-beta.4-mac-arm64.dmg
+Windows: https://github.com/jingyibi93/prompt-cabinet/releases/download/v0.1.0-beta.4/Prompt-Cabinet-0.1.0-beta.4-win-x64-setup.exe
 ```
 
 ## Promotional artwork

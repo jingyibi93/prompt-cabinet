@@ -6,6 +6,7 @@ import {
   defaultApiSettings,
   loadApiSettings,
   matchImagesWithApi,
+  normalizeCodexModelId,
   saveApiSettings,
   testApiConnection,
 } from "./apiClient";
@@ -3005,11 +3006,24 @@ function ApiSettingsPage({
               <input
                 value={draft.model}
                 onChange={(event) => setDraft({ ...draft, model: event.target.value })}
-                placeholder={t("Optional, for example gpt-5.4", "可选，例如 gpt-5.4")}
+                onBlur={() => setDraft((current) => ({ ...current, model: normalizeCodexModelId(current.model) }))}
+                list="codex-model-options"
+                autoCapitalize="none"
+                spellCheck={false}
+                placeholder={t("Optional; for example gpt-5.6-sol", "可选，例如 gpt-5.6-sol")}
               />
+              <datalist id="codex-model-options">
+                <option value="gpt-5.6-sol">GPT-5.6 Sol</option>
+                <option value="gpt-5.6-terra">GPT-5.6 Terra</option>
+                <option value="gpt-5.6-luna">GPT-5.6 Luna</option>
+                <option value="gpt-5.5">GPT-5.5</option>
+              </datalist>
             </label>
             <div className="settings-note">
-              {t("Local Codex requires Codex to be installed and signed in on this computer. It uses your Codex/ChatGPT account quota.", "本地 Codex 需要这台电脑已安装并登录 Codex，并会使用你的 Codex/ChatGPT 账户额度。")}
+              {t(
+                "Use a model ID such as gpt-5.6-sol, or leave this blank to use the current Codex default. Local Codex must be installed and signed in, and uses your Codex/ChatGPT account quota.",
+                "请输入模型 ID（例如 gpt-5.6-sol），不要输入展示名称；留空则使用当前 Codex 默认模型。本地 Codex 需要已安装并登录，并会使用你的 Codex/ChatGPT 账户额度。",
+              )}
             </div>
           </>
         )}

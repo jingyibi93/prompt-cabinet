@@ -52,7 +52,7 @@ const translations = {
   zh: {
     navFeatures: "功能", navPrivacy: "隐私", navDownload: "下载", headerDownload: "下载",
     heroEyebrow: "Prompt 更好，工作更快。", heroDownloadMac: "下载 Mac Beta", heroDownloadWindows: "下载 Windows Beta", heroInstall: "安装说明",
-    compatibility: "适用于 Apple 芯片 Mac · Windows x64 · Beta 0.1.0-beta.3",
+    compatibility: "适用于 Apple 芯片 Mac · Windows x64 · Beta 0.1.0-beta.4",
     languageSupport: "支持中文与英文",
     manifestoTitle: "一个喜欢的 Prompt，<br />值得被好好使用。",
     manifestoCopy: "从某一刻的灵感，到下一次真正派上用场。<br />Prompt Cabinet 让每一个好想法，都留在触手可及的地方。",
@@ -83,7 +83,7 @@ const translations = {
   en: {
     navFeatures: "Features", navPrivacy: "Your data", navDownload: "Download", headerDownload: "Download",
     heroEyebrow: "BETTER PROMPTS. FASTER WORK.", heroDownloadMac: "Download Mac Beta", heroDownloadWindows: "Download Windows Beta", heroInstall: "Installation guide",
-    compatibility: "Apple silicon Macs · Windows x64 · Beta 0.1.0-beta.3",
+    compatibility: "Apple silicon Macs · Windows x64 · Beta 0.1.0-beta.4",
     languageSupport: "Available in Chinese and English",
     manifestoTitle: "A Prompt you love<br />deserves to be used well.",
     manifestoCopy: "From a passing idea to the moment it matters.<br />Prompt Cabinet keeps every good thought within reach.",

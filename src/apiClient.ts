@@ -11,6 +11,25 @@ export const defaultApiSettings: ApiSettings = {
   model: "",
 };
 
+const CODEX_MODEL_ID_PATTERN = /^gpt-(\d+(?:\.\d+)*)(?:-(sol|terra|luna))?$/i;
+
+export function normalizeCodexModelId(model: unknown): string {
+  if (typeof model !== "string") return "";
+
+  const trimmed = model.trim();
+  if (!trimmed) return "";
+
+  const candidate = trimmed
+    .replace(/[‐‑‒–—−]/g, "-")
+    .replace(/[\s_]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^gpt(?=\d)/i, "gpt-");
+  const match = candidate.match(CODEX_MODEL_ID_PATTERN);
+
+  if (!match) return trimmed;
+  return `gpt-${match[1]}${match[2] ? `-${match[2].toLowerCase()}` : ""}`;
+}
+
 export async function loadApiSettings(): Promise<ApiSettings> {
   if (window.promptCabinetApi) {
     return normalizeSettings(await window.promptCabinetApi.loadSettings());
@@ -90,13 +109,14 @@ export async function classifyPromptsWithApi(
 
 function normalizeSettings(value: Partial<ApiSettings>): ApiSettings {
   const provider = getProvider(value);
+  const rawModel = value.model?.trim() || "";
   return {
     ...defaultApiSettings,
     ...value,
     provider,
     baseUrl: value.baseUrl?.trim() || defaultApiSettings.baseUrl,
     apiKey: value.apiKey?.trim() || "",
-    model: value.model?.trim() || "",
+    model: provider === "codex-local" ? normalizeCodexModelId(rawModel) : rawModel,
     enabled: provider !== "mock" && Boolean(value.enabled ?? true),
   };
 }
