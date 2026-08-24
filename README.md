@@ -71,3 +71,5 @@ Analyze settings are stored locally as:
 ## Notes
 
 Prompt Cabinet does not require an API key by default. Mock Rules analysis runs locally. OpenAI-compatible API and Local Codex modes are optional user-controlled settings.
+
+内测QQ群：428152841
