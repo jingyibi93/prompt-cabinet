@@ -492,7 +492,7 @@ body { background: radial-gradient(circle at 88% 4%, rgba(178, 203, 255, .38), t
 }
 .beta-code-number { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; padding: 3px 4px 20px; }
 .beta-code-number span { color: #858a95; font-size: 13px; font-weight: 680; letter-spacing: .04em; }
-.beta-code-number strong { color: #15171d; font-size: clamp(1.35rem, 2.25vw, 2rem); letter-spacing: .04em; }
+.beta-code-number strong { color: #15171d; font-size: clamp(1rem, 1.2vw, 1.15rem); letter-spacing: .04em; }
 .beta-recruit-code img { display: block; width: 100%; height: auto; aspect-ratio: 1; border-radius: 18px; background: #fff; }
 
 @media (max-width: 900px) {
@@ -506,6 +506,6 @@ body { background: radial-gradient(circle at 88% 4%, rgba(178, 203, 255, .38), t
   .beta-recruit-copy h2 { margin: 18px 0; font-size: 2.5rem; }
   .beta-recruit-copy p { font-size: 14px; }
   .beta-recruit-code { padding: 16px; border-radius: 23px; }
-  .beta-code-number { padding: 2px 3px 14px; }.beta-code-number strong { font-size: 1.3rem; }
+  .beta-code-number { padding: 2px 3px 14px; }.beta-code-number strong { font-size: 1rem; }
   .beta-recruit-code img { border-radius: 14px; }
 }
