@@ -77,7 +77,9 @@ const translations = {
     insertNoteTitle: "第一次使用 Insert", insertNoteCopy: "按系统提示前往“系统设置 → 隐私与安全性 → 辅助功能”，打开 Prompt Cabinet 的权限，然后回到目标输入框再次点击 Insert。",
     accessibilityCaption: "系统设置 → 隐私与安全性 → 辅助功能 → 打开 Prompt Cabinet",
     downloadTitle: "给喜欢的 Prompt，<br />一个长久的位置。", downloadCopy: "免费 Beta 现已开放下载。Mac 和 Windows 都已提供。", downloadMacButton: "下载 Mac Beta", downloadWindowsButton: "下载 Windows Beta",
-    githubStar: "觉得好用？去 GitHub 给 Prompt Cabinet 一个 Star", footerCopy: "Made for people who think with prompts.",
+    githubStar: "觉得好用？去 GitHub 给 Prompt Cabinet 一个 Star",
+    betaCommunityTitle: "加入内测群，<br />一起共创下一版。", betaCommunityCopy: "分享使用反馈、提出功能建议，也可以第一时间获取版本更新与内测动态。", betaCommunityGroup: "QQ 群",
+    footerCopy: "Made for people who think with prompts.",
     documentTitle: "Prompt Cabinet — 你的桌面 Prompt 资料库", documentDescription: "Prompt Cabinet 是一款本地优先的桌面 Prompt 资料库。收集、整理、分析并随时调用你喜欢的 Prompt。",
   },
   en: {
@@ -108,7 +110,9 @@ const translations = {
     insertNoteTitle: "First time using Insert", insertNoteCopy: "Follow the prompt to System Settings → Privacy & Security → Accessibility, enable Prompt Cabinet, then return to the input field and select Insert again.",
     accessibilityCaption: "System Settings → Privacy & Security → Accessibility → Enable Prompt Cabinet",
     downloadTitle: "Give your favorite Prompts<br />a place that lasts.", downloadCopy: "The free Beta is ready to download. Both Mac and Windows builds are available.", downloadMacButton: "Download Mac Beta", downloadWindowsButton: "Download Windows Beta",
-    githubStar: "Enjoying Prompt Cabinet? Give it a Star on GitHub", footerCopy: "Made for people who think with Prompts.",
+    githubStar: "Enjoying Prompt Cabinet? Give it a Star on GitHub",
+    betaCommunityTitle: "Join the beta group.<br />Shape the next release.", betaCommunityCopy: "Share feedback, suggest features, and get new builds and beta updates first.", betaCommunityGroup: "QQ Group",
+    footerCopy: "Made for people who think with Prompts.",
     documentTitle: "Prompt Cabinet — Your desktop Prompt library", documentDescription: "A local-first desktop Prompt library for collecting, organizing, analyzing, and using your favorite Prompts.",
   },
 };

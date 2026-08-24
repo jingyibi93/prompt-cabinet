@@ -439,3 +439,73 @@ body { background: radial-gradient(circle at 88% 4%, rgba(178, 203, 255, .38), t
 .github-star { position: relative; z-index: 2; display: inline-flex; align-items: center; justify-content: center; gap: 9px; margin-top: 16px; padding: 12px 18px; border: 1px solid rgba(255,255,255,.42); border-radius: 999px; color: #fff; font-size: 13px; font-weight: 650; letter-spacing: -.01em; transition: background .25s ease, border-color .25s ease, transform .25s ease; }
 .github-star:hover { border-color: #fff; background: rgba(255,255,255,.14); transform: translateY(-2px); }
 .github-star span { color: #fff3b5; font-size: 14px; }
+
+/* Beta community: a final, low-friction invitation after the download decision. */
+.beta-recruit {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 400px);
+  align-items: center;
+  gap: clamp(42px, 6vw, 96px);
+  min-height: 620px;
+  margin-top: 110px;
+  margin-bottom: 42px;
+  padding: clamp(58px, 7vw, 98px) clamp(42px, 7vw, 96px);
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,.9);
+  border-radius: 48px;
+  background:
+    radial-gradient(circle at 88% 12%, rgba(128, 175, 255, .34), transparent 38%),
+    radial-gradient(circle at 10% 88%, rgba(73, 217, 209, .22), transparent 34%),
+    linear-gradient(145deg, #f6fbfb, #eef3ff 58%, #f8f8fc);
+}
+.beta-recruit::before {
+  position: absolute;
+  right: -150px;
+  bottom: -300px;
+  width: 620px;
+  height: 620px;
+  border: 1px solid rgba(67, 117, 255, .13);
+  border-radius: 50%;
+  content: "";
+}
+.beta-recruit-copy { position: relative; z-index: 1; max-width: 650px; }
+.beta-recruit-copy h2 {
+  margin: 24px 0 22px;
+  font-size: clamp(3.25rem, 4.4vw, 4.9rem);
+  line-height: .96;
+  letter-spacing: -.07em;
+}
+.beta-recruit-copy p { max-width: 540px; margin: 0; color: #656a75; font-size: 17px; line-height: 1.75; }
+.beta-recruit-code {
+  position: relative;
+  z-index: 1;
+  justify-self: end;
+  width: min(100%, 420px);
+  margin: 0;
+  padding: 24px;
+  border: 1px solid rgba(255,255,255,.96);
+  border-radius: 32px;
+  background: rgba(255,255,255,.88);
+  box-shadow: 0 32px 68px rgba(41,72,128,.17), 0 4px 12px rgba(40,58,88,.06);
+  backdrop-filter: blur(18px);
+}
+.beta-code-number { display: flex; align-items: baseline; justify-content: space-between; gap: 18px; padding: 3px 4px 20px; }
+.beta-code-number span { color: #858a95; font-size: 13px; font-weight: 680; letter-spacing: .04em; }
+.beta-code-number strong { color: #15171d; font-size: clamp(1.35rem, 2.25vw, 2rem); letter-spacing: .04em; }
+.beta-recruit-code img { display: block; width: 100%; height: auto; aspect-ratio: 1; border-radius: 18px; background: #fff; }
+
+@media (max-width: 900px) {
+  .beta-recruit { grid-template-columns: 1fr; gap: 48px; min-height: 0; margin-top: 80px; padding: 72px 9%; text-align: center; }
+  .beta-recruit-copy { justify-self: center; }.beta-recruit-copy p { margin: 0 auto; }
+  .beta-recruit-code { justify-self: center; }
+}
+
+@media (max-width: 620px) {
+  .beta-recruit { width: calc(100% - 20px); gap: 38px; margin-top: 70px; margin-bottom: 24px; padding: 58px 22px 24px; border-radius: 28px; }
+  .beta-recruit-copy h2 { margin: 18px 0; font-size: 2.5rem; }
+  .beta-recruit-copy p { font-size: 14px; }
+  .beta-recruit-code { padding: 16px; border-radius: 23px; }
+  .beta-code-number { padding: 2px 3px 14px; }.beta-code-number strong { font-size: 1.3rem; }
+  .beta-recruit-code img { border-radius: 14px; }
+}
